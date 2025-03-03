@@ -1,0 +1,23 @@
+# podman-compose.yml
+version: '3'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: quiz-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - backend_data:/app/uploads
+    environment:
+      - ENVIRONMENT=development
+      - PYTHONPATH=/app
+    env_file:
+      - .env
+
+volumes:
+  backend_data:
