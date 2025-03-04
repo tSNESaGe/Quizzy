@@ -163,41 +163,21 @@ class QuestionService:
     ) -> None:
         """
         Delete a question from a quiz
+        The deletion will cascade to question history thanks to 
+        the ondelete="CASCADE" setting in the foreign key
         """
         # Get the question
         question = db.query(Question).filter(Question.id == question_id).first()
         if not question:
             raise ValueError(f"Question with ID {question_id} not found")
         
-        # Store the question data for history
-        previous_state = {
-            "question_text": question.question_text,
-            "question_type": question.question_type.value,
-            "explanation": question.explanation,
-            "position": question.position,
-            "answers": [
-                {
-                    "id": a.id,
-                    "answer_text": a.answer_text,
-                    "is_correct": a.is_correct,
-                    "position": a.position
-                } for a in question.answers
-            ]
-        }
-        
-        # Create history entry before deletion
-        history_entry = QuestionHistory(
-            question_id=question.id,
-            user_id=user_id,
-            action=ActionType.DELETE,
-            previous_state=previous_state
-        )
-        
-        db.add(history_entry)
-        
-        # Delete the question (cascades to answers)
-        db.delete(question)
-        db.commit()
+        try:
+            # Simply delete the question - the cascade will handle related records
+            db.delete(question)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            raise ValueError(f"Could not delete question: {str(e)}")
     
     @staticmethod
     async def revert_question(

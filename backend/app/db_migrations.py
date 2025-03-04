@@ -119,6 +119,45 @@ def run_migrations():
 
         print("Database migration completed successfully")
 
+        has_file_size = False
+        for column in inspector.get_columns('documents'):
+            if column['name'] == 'file_size':
+                has_file_size = True
+                break
+
+        if not has_file_size:
+            print("Adding file_size column to documents table...")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE documents ADD COLUMN file_size BIGINT"))
+                conn.commit()
+            print("file_size column added successfully")
+            
+        print("Fixing question history foreign key constraint for cascade delete...")
+        try:
+            with engine.connect() as conn:
+                # Try to drop the constraint - if it fails, it probably doesn't exist
+                try:
+                    conn.execute(text("""
+                        ALTER TABLE question_history 
+                        DROP CONSTRAINT IF EXISTS question_history_question_id_fkey
+                    """))
+                    print("Dropped existing constraint")
+                except Exception as e:
+                    print(f"Note: Could not drop constraint: {e}")
+                
+                # Create the constraint with ON DELETE CASCADE
+                conn.execute(text("""
+                    ALTER TABLE question_history 
+                    ADD CONSTRAINT question_history_question_id_fkey 
+                    FOREIGN KEY (question_id) 
+                    REFERENCES questions(id) 
+                    ON DELETE CASCADE
+                """))
+                
+                conn.commit()
+                print("Foreign key constraint updated with CASCADE DELETE")
+        except Exception as e:
+            print(f"Error modifying foreign key constraint: {e}")
     except Exception as e:
         db.rollback()
         print(f"Error during migration: {e}")

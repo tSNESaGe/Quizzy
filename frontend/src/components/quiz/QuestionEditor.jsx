@@ -1,4 +1,6 @@
 // frontend/src/components/quiz/QuestionEditor.jsx
+// Updated to match the Question Bank styling
+
 import React, { useState, useEffect } from 'react';
 import Button from '../common/Button';
 import { TrashIcon, PlusCircleIcon } from '@heroicons/react/24/outline';
@@ -46,6 +48,18 @@ const QuestionEditor = ({ question, onSave, onCancel, isNew = false }) => {
     setQuestionData(prev => ({
       ...prev,
       correct_answer: e.target.value
+    }));
+  };
+
+  const handleCorrectAnswerSelect = (index) => {
+    const newAnswers = questionData.answers.map((answer, i) => ({
+      ...answer,
+      is_correct: i === index
+    }));
+    
+    setQuestionData(prev => ({
+      ...prev,
+      answers: newAnswers
     }));
   };
 
@@ -302,7 +316,7 @@ const QuestionEditor = ({ question, onSave, onCancel, isNew = false }) => {
                   <input
                     type="radio"
                     checked={answer.is_correct}
-                    onChange={() => handleCorrectAnswerChange(index)}
+                    onChange={() => handleCorrectAnswerSelect(index)}
                     className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300"
                   />
                   <input

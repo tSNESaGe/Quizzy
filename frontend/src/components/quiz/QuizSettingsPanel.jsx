@@ -1,7 +1,9 @@
 // frontend/src/components/quiz/QuizSettingsPanel.jsx
+// Updated to match the Question Bank styling
+
 import React from 'react';
 import Button from '../common/Button';
-import { ChevronUpIcon, AdjustmentsHorizontalIcon } from '@heroicons/react/24/outline';
+import { ChevronUpIcon, AdjustmentsHorizontalIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 
 const QuizSettingsPanel = ({ 
   quizForm, 
@@ -15,7 +17,10 @@ const QuizSettingsPanel = ({
   return (
     <div className="bg-white rounded-lg shadow-md p-6">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold text-gray-800">Quiz Settings</h2>
+        <h2 className="text-xl font-semibold text-gray-800 flex items-center">
+          <Cog6ToothIcon className="h-5 w-5 text-primary-600 mr-2" />
+          Quiz Settings
+        </h2>
         <button
           onClick={() => setExpandedSettings(!expandedSettings)}
           className="text-gray-500 hover:text-gray-700"

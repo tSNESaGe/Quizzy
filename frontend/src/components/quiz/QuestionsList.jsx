@@ -1,4 +1,6 @@
 // frontend/src/components/quiz/QuestionsList.jsx
+// Updated to ensure the question icons match the Question Bank page style
+
 import React, { useState, useRef } from 'react';
 import {
   PencilIcon,
@@ -117,7 +119,13 @@ const QuestionsList = ({
                   </span>
                   <div>
                     <p className="text-gray-900 font-medium">{question.question_text}</p>
-                    <span className="text-xs text-gray-500 mt-1 inline-block">
+                    <span className={`text-xs px-2 py-0.5 mt-1 inline-block rounded-full ${
+                      question.question_type === 'multiple_choice'
+                        ? 'bg-purple-100 text-purple-700' 
+                        : question.question_type === 'boolean'
+                          ? 'bg-blue-100 text-blue-700'
+                          : 'bg-green-100 text-green-700'
+                    }`}>
                       {question.question_type === 'multiple_choice' 
                         ? 'Multiple Choice' 
                         : question.question_type === 'boolean'
@@ -138,7 +146,7 @@ const QuestionsList = ({
                         className={`p-1 rounded ${
                           isQuestionDisabled 
                             ? 'text-gray-400 cursor-not-allowed'
-                            : 'text-gray-500 hover:text-primary-600 hover:bg-gray-100'
+                            : 'text-blue-600 hover:text-blue-800 hover:bg-gray-100'
                         }`}
                         title="Edit question"
                         disabled={isQuestionDisabled}
@@ -151,7 +159,7 @@ const QuestionsList = ({
                         className={`p-1 rounded ${
                           isQuestionDisabled 
                             ? 'text-gray-400 cursor-not-allowed'
-                            : 'text-gray-500 hover:text-primary-600 hover:bg-gray-100'
+                            : 'text-gray-600 hover:text-primary-600 hover:bg-gray-100'
                         }`}
                         title="View history"
                         disabled={isQuestionDisabled}
@@ -163,8 +171,8 @@ const QuestionsList = ({
                         onClick={(e) => handleQuickRevert(question, e)}
                         className={`p-1 rounded ${
                           isQuestionDisabled || isReverting
-                            ? 'text-gray-400 cursor-not-allowed bg-gray-100'
-                            : 'text-gray-500 hover:text-primary-600 hover:bg-gray-100'
+                            ? 'text-gray-400 cursor-not-allowed'
+                            : 'text-gray-600 hover:text-primary-600 hover:bg-gray-100'
                         }`}
                         title="Revert to previous version"
                         disabled={isQuestionDisabled || isReverting}
@@ -181,8 +189,8 @@ const QuestionsList = ({
                         }}
                         className={`p-1 rounded ${
                           isQuestionDisabled
-                            ? 'text-gray-400 bg-gray-100 cursor-not-allowed'
-                            : 'text-gray-500 hover:text-primary-600 hover:bg-gray-100'
+                            ? 'text-gray-400 cursor-not-allowed'
+                            : 'text-green-600 hover:text-green-800 hover:bg-gray-100'
                         }`}
                         title="Regenerate question"
                         disabled={isQuestionDisabled}
@@ -200,7 +208,7 @@ const QuestionsList = ({
                         className={`p-1 rounded ${
                           isQuestionDisabled
                             ? 'text-gray-400 cursor-not-allowed'
-                            : 'text-gray-500 hover:text-red-600 hover:bg-gray-100'
+                            : 'text-red-500 hover:text-red-700 hover:bg-gray-100'
                         }`}
                         title="Delete question"
                         disabled={isQuestionDisabled}
@@ -237,19 +245,6 @@ const QuestionsList = ({
                         disabled={true} 
                       />
                     )}
-                  </div>
-                  
-                  {/* Only show question type info as text, no buttons */}
-                  <div className="mt-4">
-                    <p className="text-sm text-gray-600">
-                      <span className="font-medium">Question Type:</span> {
-                        question.question_type === 'multiple_choice' 
-                          ? 'Multiple Choice' 
-                          : question.question_type === 'boolean'
-                            ? 'True/False'
-                            : 'Open-Ended'
-                      }
-                    </p>
                   </div>
                 </div>
               )}

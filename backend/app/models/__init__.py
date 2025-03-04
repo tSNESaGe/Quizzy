@@ -15,3 +15,9 @@ Quiz.history = relationship("QuizHistory", back_populates="quiz", cascade="all, 
 Quiz.projects = relationship("ProjectQuiz", back_populates="quiz")
 
 Question.quiz = relationship("Quiz", back_populates="questions")
+Question.answers = relationship("Answer", back_populates="question", cascade="all, delete-orphan")
+Question.history = relationship("QuestionHistory", back_populates="question", cascade="all, delete-orphan")
+
+# Update these relationships in the history models
+QuestionHistory.question = relationship("Question", back_populates="history", passive_deletes=True)
+QuizHistory.quiz = relationship("Quiz", back_populates="history", passive_deletes=True)

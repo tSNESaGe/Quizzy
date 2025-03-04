@@ -34,7 +34,7 @@ class QuestionHistory(Base):
     __tablename__ = "question_history"
 
     id = Column(Integer, primary_key=True, index=True)
-    question_id = Column(Integer, ForeignKey("questions.id"))
+    question_id = Column(Integer, ForeignKey("questions.id", ondelete="CASCADE"), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     action = Column(Enum(ActionType), nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)

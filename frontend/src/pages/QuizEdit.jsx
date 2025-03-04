@@ -468,7 +468,7 @@ const QuizEdit = () => {
             
             <Button
               onClick={handleRegenerateQuiz}
-              variant="secondary"
+              variant="primary"
               disabled={isGenerating}
               className="flex items-center"
             >
@@ -521,7 +521,7 @@ const QuizEdit = () => {
                 <h2 className="text-xl font-semibold text-gray-800">Questions</h2>
                 <Button
                   onClick={handleAddQuestion}
-                  variant="outline"
+                  variant="primary"
                   size="sm"
                   className="flex items-center"
                   disabled={isGenerating}
@@ -556,7 +556,7 @@ const QuizEdit = () => {
                 {newQuestionMode && (
                   <div 
                     ref={newQuestionRef}
-                    className="border-2 border-primary-300 bg-blue-50 rounded-lg overflow-hidden mt-6"
+                    className="border-2 border-primary-300 bg-primary-50 rounded-lg overflow-hidden mt-6"
                   >
                     <h3 className="bg-primary-600 text-white px-4 py-2">Add New Question</h3>
                     <QuestionEditor 
