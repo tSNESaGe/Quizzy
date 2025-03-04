@@ -7,6 +7,79 @@ from app.models.question import Question, QuestionType
 from app.models.history import ActionType
 from app.database import SessionLocal, engine, Base
 
+def update_enum_type(conn, enum_type_name, enum_values):
+    """
+    Update a PostgreSQL enum type with new values from Python enum
+    
+    Args:
+        conn: SQLAlchemy connection object
+        enum_type_name: Name of the PostgreSQL enum type (e.g. 'actiontype')
+        enum_values: List of values from Python enum (strings)
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # First check if the enum type exists
+        enum_exists = conn.execute(text(
+            f"SELECT EXISTS(SELECT 1 FROM pg_type WHERE typname = '{enum_type_name}')"
+        )).scalar()
+        
+        if not enum_exists:
+            print(f"  Enum type '{enum_type_name}' doesn't exist in database, skipping update")
+            return False
+        
+        # Get all current enum values from Postgres
+        existing_enum_values = conn.execute(text(
+            f"SELECT enumlabel FROM pg_enum WHERE enumtypid = "
+            f"(SELECT oid FROM pg_type WHERE typname = '{enum_type_name}')"
+        )).fetchall()
+        
+        existing_enum_values = [row[0] for row in existing_enum_values]
+        print(f"  Existing {enum_type_name} values: {existing_enum_values}")
+        
+        # Find missing values
+        missing_values = [value for value in enum_values if value not in existing_enum_values]
+        
+        if missing_values:
+            print(f"  Found {len(missing_values)} new enum values to add: {missing_values}")
+            
+            # Check PostgreSQL version to determine how to add values
+            pg_version = conn.execute(text("SHOW server_version")).scalar()
+            print(f"  PostgreSQL version: {pg_version}")
+            
+            # Parse version string to get major version number
+            major_version = int(pg_version.split('.')[0])
+            
+            # PostgreSQL 9.6+ supports IF NOT EXISTS
+            supports_if_not_exists = major_version >= 10
+            
+            # Add missing values
+            for value in missing_values:
+                try:
+                    if supports_if_not_exists:
+                        conn.execute(text(f"ALTER TYPE {enum_type_name} ADD VALUE IF NOT EXISTS '{value}'"))
+                        print(f"  -> Added '{value}' to {enum_type_name} enum")
+                    else:
+                        # For older PostgreSQL versions, we need to check existence first
+                        exists = conn.execute(text(
+                            f"SELECT EXISTS(SELECT 1 FROM pg_enum WHERE enumlabel = '{value}' AND "
+                            f"enumtypid = (SELECT oid FROM pg_type WHERE typname = '{enum_type_name}'))"
+                        )).scalar()
+                        
+                        if not exists:
+                            conn.execute(text(f"ALTER TYPE {enum_type_name} ADD VALUE '{value}'"))
+                            print(f"  -> Added '{value}' to {enum_type_name} enum (older PG version method)")
+                except Exception as e:
+                    print(f"  -> Error adding '{value}': {e}")
+        else:
+            print(f"  No new {enum_type_name} values to add")
+        
+        return True
+    except Exception as e:
+        print(f"Warning: Could not update {enum_type_name} enum: {e}")
+        return False
+
 def run_migrations():
     """Run database schema migrations and fixes for Postgres."""
     print("Starting database migrations...")
@@ -117,8 +190,6 @@ def run_migrations():
             db.commit()
             print(f"Updated hash values for {len(documents)} documents")
 
-        print("Database migration completed successfully")
-
         has_file_size = False
         for column in inspector.get_columns('documents'):
             if column['name'] == 'file_size':
@@ -135,29 +206,97 @@ def run_migrations():
         print("Fixing question history foreign key constraint for cascade delete...")
         try:
             with engine.connect() as conn:
-                # Try to drop the constraint - if it fails, it probably doesn't exist
-                try:
-                    conn.execute(text("""
-                        ALTER TABLE question_history 
-                        DROP CONSTRAINT IF EXISTS question_history_question_id_fkey
-                    """))
-                    print("Dropped existing constraint")
-                except Exception as e:
-                    print(f"Note: Could not drop constraint: {e}")
+                # First check if the question_history table exists
+                has_table = conn.execute(text(
+                    "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name='question_history')"
+                )).scalar()
                 
-                # Create the constraint with ON DELETE CASCADE
-                conn.execute(text("""
-                    ALTER TABLE question_history 
-                    ADD CONSTRAINT question_history_question_id_fkey 
-                    FOREIGN KEY (question_id) 
-                    REFERENCES questions(id) 
-                    ON DELETE CASCADE
-                """))
-                
-                conn.commit()
+                if not has_table:
+                    print("question_history table doesn't exist, skipping constraint update")
+                else:
+                    # Check if the constraint exists
+                    constraint_exists = conn.execute(text("""
+                        SELECT COUNT(*) FROM information_schema.table_constraints 
+                        WHERE constraint_name = 'question_history_question_id_fkey' 
+                        AND table_name = 'question_history'
+                    """)).scalar() > 0
+                    
+                    if constraint_exists:
+                        # Try to drop the constraint if it exists
+                        try:
+                            conn.execute(text("""
+                                ALTER TABLE question_history 
+                                DROP CONSTRAINT question_history_question_id_fkey
+                            """))
+                            print("Dropped existing constraint")
+                        except Exception as e:
+                            print(f"Note: Could not drop constraint: {e}")
+                            # Continue anyway
+                    
+                    # Check if the questions table exists
+                    questions_table_exists = conn.execute(text(
+                        "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name='questions')"
+                    )).scalar()
+                    
+                    if not questions_table_exists:
+                        print("questions table doesn't exist, skipping constraint creation")
+                    else:
+                        # Check if the question_id column exists
+                        column_exists = conn.execute(text("""
+                            SELECT EXISTS(SELECT 1 FROM information_schema.columns 
+                            WHERE table_name='question_history' AND column_name='question_id')
+                        """)).scalar()
+                        
+                        if not column_exists:
+                            print("question_id column doesn't exist in question_history, skipping constraint creation")
+                        else:
+                            # Try to create the constraint with ON DELETE CASCADE
+                            try:
+                                conn.execute(text("""
+                                    ALTER TABLE question_history 
+                                    ADD CONSTRAINT question_history_question_id_fkey 
+                                    FOREIGN KEY (question_id) 
+                                    REFERENCES questions(id) 
+                                    ON DELETE CASCADE
+                                """))
+                                print("Foreign key constraint updated with CASCADE DELETE")
+                            except Exception as e:
+                                print(f"Error creating foreign key constraint: {e}")
+                                # Don't fail the entire migration
+                    
+                    conn.commit()
                 print("Foreign key constraint updated with CASCADE DELETE")
         except Exception as e:
             print(f"Error modifying foreign key constraint: {e}")
+            
+        print("Updating enum types...")
+        try:
+            with engine.connect() as conn:
+                try:
+                    # Update ActionType enum
+                    action_type_values = [action.value for action in ActionType]
+                    update_enum_type(conn, 'actiontype', action_type_values)
+                except Exception as action_e:
+                    print(f"Error updating actiontype enum: {action_e}")
+                
+                try:
+                    # Update QuestionType enum
+                    question_type_values = [qtype.value for qtype in QuestionType]
+                    update_enum_type(conn, 'questiontype', question_type_values)
+                except Exception as question_e:
+                    print(f"Error updating questiontype enum: {question_e}")
+                
+                # Add any other enum types here
+                
+                try:
+                    # For PostgreSQL 9.6+, we can use a transaction
+                    conn.commit()
+                    print("All enum types updated successfully")
+                except Exception as commit_e:
+                    print(f"Error committing enum type updates: {commit_e}")
+        except Exception as e:
+            print(f"Error updating enum types: {e}")
+            
     except Exception as e:
         db.rollback()
         print(f"Error during migration: {e}")

@@ -10,7 +10,8 @@ import {
   ChevronUpIcon,
   ChevronDownIcon,
   ArrowUturnLeftIcon,
-  ClockIcon
+  ClockIcon,
+  MinusCircleIcon  
 } from '@heroicons/react/24/outline';
 
 const QuestionItem = ({
@@ -25,7 +26,8 @@ const QuestionItem = ({
   handleChangeQuestionType,
   handleDeleteQuestion,
   handleRevertQuestion,
-  handleViewQuestionHistory
+  handleViewQuestionHistory,
+  handleRemoveFromQuiz  
 }) => {
   return (
     <div className="bg-white border rounded-lg shadow-sm overflow-hidden">
@@ -78,6 +80,13 @@ const QuestionItem = ({
               <ArrowPathIcon className="h-5 w-5" />
             </button>
             <button
+                onClick={() => handleRemoveFromQuiz(question.id)}
+                className="p-1 text-orange-500 hover:text-orange-700 rounded"
+                title="Remove from quiz (keep in Question Bank)"
+            >
+                <MinusCircleIcon className="h-5 w-5" />
+            </button>
+            <button
               onClick={() => setConfirmDeleteId(question.id)}
               className="p-1 text-red-500 hover:text-red-700 rounded"
             >
@@ -125,26 +134,6 @@ const QuestionItem = ({
                 <p className="text-sm text-blue-700">{question.explanation}</p>
               </div>
             )}
-            
-            <div className="mt-4 flex justify-end space-x-2">
-              <Button
-                onClick={() => handleChangeQuestionType(
-                  question.id, 
-                  question.question_type === 'multiple_choice' ? 'boolean' : 'multiple_choice'
-                )}
-                variant="outline"
-                size="sm"
-              >
-                Convert to {question.question_type === 'multiple_choice' ? 'True/False' : 'Multiple Choice'}
-              </Button>
-              <Button
-                onClick={() => handleStartEditQuestion(question.id)}
-                variant="primary"
-                size="sm"
-              >
-                Edit Question
-              </Button>
-            </div>
           </div>
         )}
         

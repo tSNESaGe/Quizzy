@@ -21,6 +21,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - quiz_network
 
   backend:
     build:
@@ -28,31 +30,58 @@ services:
       dockerfile: Dockerfile
     container_name: quiz_backend
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     env_file:
       - .env
     environment:
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+      - PYTHONUNBUFFERED=1  # Ensures Python output is sent straight to terminal
     ports:
       - "${APP_PORT}:8000"
     volumes:
       - ./backend:/app
       - ./backend/${UPLOAD_FOLDER}:/app/${UPLOAD_FOLDER}
-    # command: uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT} --reload
-    command: sh -c "/wait && python -m app.db_migrations && uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT} --reload"
+    command: >
+      sh -c "
+      /wait &&
+        echo 'Waiting for postgres...' &&
+        python -m app.db_migrations &&
+        echo 'Starting backend server...' &&
+        uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT} --reload
+      "
+    networks:
+      - quiz_network
+    restart: on-failure:3
+    # Add healthcheck for backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${APP_PORT}/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   frontend:
-      build:
-        context: ./frontend
-        dockerfile: Dockerfile
-      container_name: quiz_frontend
-      ports:
-        - "${FRONTEND_PORT}:5173"
-      volumes:
-        - ./frontend:/app
-        - /app/node_modules
-      env_file:
-        - .env
-      command: ["yarn", "dev", "--host", "0.0.0.0"]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: quiz_frontend
+    ports:
+      - "${FRONTEND_PORT}:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    env_file:
+      - .env
+    command: ["yarn", "dev", "--host", "0.0.0.0"]
+    networks:
+      - quiz_network
+    depends_on:
+      - backend
+
+networks:
+  quiz_network:
+    driver: bridge
 
 volumes:
   pg_data:

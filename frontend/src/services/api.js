@@ -254,6 +254,10 @@ export const revertQuestion = async (quizId, questionId, historyId = null) => {
   return api.post(url);
 };
 
+export const getUnassignedQuestions = async (skip = 0, limit = 100) => {
+  return api.get(`/quizzes/unassigned?skip=${skip}&limit=${limit}`);
+};
+
 export const revertQuiz = async (quizId, historyId = null) => {
   let url = `/quizzes/${quizId}/revert`;
   if (historyId) {
@@ -262,7 +266,10 @@ export const revertQuiz = async (quizId, historyId = null) => {
   return api.post(url);
 };
 
-// Project API
+export const removeQuestionFromQuiz = async (quizId, questionId) => {
+  return api.post(`/quizzes/${quizId}/questions/${questionId}/remove`);
+};
+
 export const getProjects = async () => {
   return api.get('/projects');
 };

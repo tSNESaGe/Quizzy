@@ -14,6 +14,8 @@ class ActionType(enum.Enum):
     ADD_QUIZ = "add_quiz"
     REMOVE_QUIZ = "remove_quiz"
     REORDER = "reorder"
+    REMOVE_FROM_QUIZ = "remove_from_quiz"
+    REMOVE_QUESTION = "remove_question"
 
 class QuizHistory(Base):
     __tablename__ = "quiz_history"

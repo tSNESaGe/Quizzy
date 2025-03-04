@@ -463,6 +463,113 @@ async def delete_question(
     
     return {"message": "Question deleted successfully"}
 
+@router.post("/{quiz_id}/questions/{question_id}/remove", response_model=QuestionSchema)
+async def remove_question_from_quiz(
+    quiz_id: int,
+    question_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Remove a question from a quiz without deleting it.
+    The question will be available in the Question Bank but no longer associated with any quiz.
+    """
+    # Verify quiz exists and belongs to user
+    quiz = db.query(Quiz).filter(Quiz.id == quiz_id, Quiz.user_id == current_user.id).first()
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    
+    # Verify question belongs to quiz
+    question = db.query(Question).filter(
+        Question.id == question_id,
+        Question.quiz_id == quiz_id
+    ).first()
+    
+    if not question:
+        raise HTTPException(status_code=404, detail="Question not found in this quiz")
+    
+    # Store the previous state for history
+    previous_state = {
+        "quiz_id": question.quiz_id,
+        "question_text": question.question_text,
+        "question_type": question.question_type.value,
+        "explanation": question.explanation,
+        "position": question.position,
+        "answers": [
+            {
+                "id": a.id,
+                "answer_text": a.answer_text,
+                "is_correct": a.is_correct,
+                "position": a.position
+            } for a in question.answers
+        ]
+    }
+    
+    # Set the quiz_id to null to remove it from the quiz
+    # We're not deleting the question, just removing its association
+    question.quiz_id = None
+    
+    # Record this action in history
+    HistoryService.record_question_action(
+        db=db,
+        question_id=question.id,
+        user_id=current_user.id,
+        action=ActionType.REMOVE_FROM_QUIZ,
+        previous_state=previous_state
+    )
+    
+    # Also record the action in quiz history
+    HistoryService.record_quiz_action(
+        db=db,
+        quiz_id=quiz_id,
+        user_id=current_user.id,
+        action=ActionType.REMOVE_QUESTION,
+        details=f"Removed question: {question.question_text[:50]}..."
+    )
+    
+    db.commit()
+    db.refresh(question)
+    
+    return question
+
+@router.get("/unassigned", response_model=List[QuestionSchema])
+def get_unassigned_questions(
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get all questions that are not assigned to any quiz.
+    These are questions that have been removed from quizzes but not deleted.
+    """
+    # Find questions where quiz_id is NULL but that belong to this user
+    # We need to join with quizzes to check user_id since the question itself doesn't have user_id
+    
+    # First get all quiz IDs that belong to the current user
+    user_quiz_ids = db.query(Quiz.id).filter(Quiz.user_id == current_user.id).all()
+    user_quiz_ids = [q[0] for q in user_quiz_ids]  # Convert to list of IDs
+    
+    # Now find all questions that were previously in user's quizzes but now have null quiz_id
+    # For this, we need to search through question history
+    questions = []
+    
+    # Get questions with null quiz_id where history shows they belonged to this user's quizzes
+    question_history_entries = db.query(QuestionHistory).filter(
+        QuestionHistory.user_id == current_user.id,
+        QuestionHistory.action == ActionType.REMOVE_FROM_QUIZ
+    ).all()
+    
+    question_ids = set(entry.question_id for entry in question_history_entries if entry.question_id is not None)
+    
+    if question_ids:
+        questions = db.query(Question).filter(
+            Question.id.in_(question_ids),
+            Question.quiz_id.is_(None)
+        ).offset(skip).limit(limit).all()
+    
+    return questions
+
 @router.post("/{quiz_id}/questions/{question_id}/regenerate", response_model=QuestionSchema)
 async def regenerate_question(
     quiz_id: int,

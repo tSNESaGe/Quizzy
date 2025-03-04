@@ -25,6 +25,8 @@ const QuestionBank = () => {
     quizzes,
     fetchQuizzes,
     deleteQuestion,
+    unassignedQuestions,
+    fetchUnassignedQuestions,
     isLoading
   } = useAppStore();
 
@@ -37,6 +39,11 @@ const QuestionBank = () => {
   const [copySuccess, setCopySuccess] = useState(null);
   const [sortOption, setSortOption] = useState('quiz'); // 'quiz', 'type', 'updated'
   
+  useEffect(() => {
+    fetchQuizzes();
+    fetchUnassignedQuestions();
+  }, [fetchQuizzes, fetchUnassignedQuestions]);
+
   // Fetch quizzes on component mount
   useEffect(() => {
     fetchQuizzes();
@@ -46,15 +53,30 @@ const QuestionBank = () => {
   const allQuestions = useMemo(() => {
     if (!quizzes || !quizzes.length) return [];
     
-    return quizzes.flatMap(quiz => 
-      (quiz.questions || []).map(question => ({
+    // Get questions from quizzes
+    const questionsFromQuizzes = quizzes.flatMap(quiz => 
+        (quiz.questions || []).map(question => ({
         ...question,
         quizTitle: quiz.title,
         quizId: quiz.id,
         quizTopic: quiz.topic
-      }))
+        }))
     );
-  }, [quizzes]);
+    
+    // Add unassigned questions
+    const unassignedQuestionsWithMetadata = (unassignedQuestions || []).map(question => ({
+        ...question,
+        quizTitle: null,
+        quizId: null,
+        quizTopic: null
+    }));
+    
+    // Combine both sets of questions
+    return [
+        ...questionsFromQuizzes,
+        ...unassignedQuestionsWithMetadata
+    ];
+    }, [quizzes, unassignedQuestions]);
 
   // Create unique quiz options for filter dropdown
   const quizOptions = useMemo(() => {
@@ -62,6 +84,7 @@ const QuestionBank = () => {
     
     return [
       { id: 'all', title: 'All Quizzes' },
+      { id: 'unassigned', title: 'Unassigned Questions' }, // Add this line
       ...quizzes.map(quiz => ({ id: quiz.id, title: quiz.title }))
     ];
   }, [quizzes]);
@@ -72,7 +95,12 @@ const QuestionBank = () => {
     
     return allQuestions.filter(question => {
       // Filter by quiz
-      if (selectedQuiz !== 'all' && question.quizId !== parseInt(selectedQuiz)) {
+      if (selectedQuiz === 'unassigned') {
+        // Show only questions with no quizId
+        if (question.quizId) {
+          return false;
+        }
+      } else if (selectedQuiz !== 'all' && question.quizId !== parseInt(selectedQuiz)) {
         return false;
       }
       
@@ -350,12 +378,18 @@ const QuestionBank = () => {
                           }`}>
                             {question.question_type === 'multiple_choice' ? 'Multiple Choice' : 'True/False'}
                           </span>
-                          <Link 
-                            to={`/quizzes/${question.quizId}`}
-                            className="text-xs text-gray-500 hover:text-primary-600"
-                          >
-                            {question.quizTitle}
-                          </Link>
+                          {question.quizId ? (
+                            <Link 
+                                to={`/quizzes/${question.quizId}`}
+                                className="text-xs text-gray-500 hover:text-primary-600"
+                            >
+                                {question.quizTitle}
+                            </Link>
+                            ) : (
+                            <span className="text-xs text-amber-500 font-medium px-2 py-0.5 rounded-full bg-amber-100">
+                                Unassigned
+                            </span>
+                            )}
                         </div>
                         
                         <h3 className="text-lg font-medium text-gray-900">
@@ -456,13 +490,19 @@ const QuestionBank = () => {
                             <span>Position: {question.position}</span>
                           </div>
                           
-                          <Link
-                            to={`/quizzes/${question.quizId}`}
-                            className="text-sm text-primary-600 hover:text-primary-800 flex items-center"
-                          >
-                            Go to Quiz
-                            <ArrowTopRightOnSquareIcon className="w-4 h-4 ml-1" />
-                          </Link>
+                          {question.quizId ? (
+                            <Link
+                                to={`/quizzes/${question.quizId}`}
+                                className="text-sm text-primary-600 hover:text-primary-800 flex items-center"
+                            >
+                                Go to Quiz
+                                <ArrowTopRightOnSquareIcon className="w-4 h-4 ml-1" />
+                            </Link>
+                            ) : (
+                            <span className="text-sm text-amber-600 flex items-center">
+                                Unassigned Question
+                            </span>
+                            )}
                         </div>
                       </div>
                     )}

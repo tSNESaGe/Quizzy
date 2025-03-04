@@ -27,7 +27,8 @@ const useAppStore = create(
         quizzes: [],
         currentQuiz: null,
         quizHistory: [],
-        
+        unassignedQuestions: [],
+
         projects: [],
         currentProject: null,
         
@@ -106,6 +107,21 @@ const useAppStore = create(
               isLoading: false 
             });
             return false;
+          }
+        },
+        
+        fetchUnassignedQuestions: async () => {
+          set({ isLoading: true, error: null });
+          try {
+            const questions = await api.getUnassignedQuestions();
+            set({ unassignedQuestions: questions, isLoading: false });
+            return questions;
+          } catch (error) {
+            set({ 
+              error: error.response?.data?.detail || 'Failed to fetch unassigned questions', 
+              isLoading: false 
+            });
+            return [];
           }
         },
         
@@ -840,6 +856,66 @@ const useAppStore = create(
             set({
               error: error.response?.data?.detail || 'Failed to get question history',
               isLoading: false
+            });
+            
+            throw error; // Re-throw for the component to handle
+          }
+        },
+
+        removeQuestionFromQuiz: async (quizId, questionId) => {
+          // Find the question to remove
+          let questionToRemove = null;
+          set(state => {
+            if (state.currentQuiz?.id === quizId) {
+              questionToRemove = state.currentQuiz.questions.find(q => q.id === questionId);
+            }
+            return {}; // No state change yet
+          });
+          
+          // Remove from UI immediately (optimistic update)
+          set(state => {
+            if (state.currentQuiz?.id === quizId) {
+              return {
+                currentQuiz: {
+                  ...state.currentQuiz,
+                  questions: state.currentQuiz.questions.filter(q => q.id !== questionId)
+                }
+              };
+            }
+            return {};
+          });
+          
+          // Now call API to remove from quiz but not delete the question
+          try {
+            const removedQuestion = await api.removeQuestionFromQuiz(quizId, questionId);
+            
+            // The question is now "unassigned" (no quiz), it should be added to our questions collection
+            // but not be part of any quiz
+            set(state => {
+              return { 
+                unassignedQuestions: [...state.unassignedQuestions, removedQuestion],
+                isLoading: false 
+              };
+            });
+            
+            return removedQuestion;
+          } catch (error) {
+            // Restore the removed question if server request fails
+            set(state => {
+              if (state.currentQuiz?.id === quizId && questionToRemove) {
+                return {
+                  currentQuiz: {
+                    ...state.currentQuiz,
+                    questions: [...state.currentQuiz.questions, questionToRemove].sort((a, b) => a.position - b.position)
+                  },
+                  error: error.response?.data?.detail || 'Failed to remove question from quiz',
+                  isLoading: false
+                };
+              }
+              return { 
+                error: error.response?.data?.detail || 'Failed to remove question from quiz',
+                isLoading: false 
+              };
             });
             
             throw error; // Re-throw for the component to handle

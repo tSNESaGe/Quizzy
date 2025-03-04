@@ -11,6 +11,7 @@ import QuestionsList from '../components/quiz/QuestionsList';
 import QuestionEditor from '../components/quiz/QuestionEditor';
 import QuizHistory from '../components/quiz/QuizHistory';
 import useOutsideClick from '../hooks/useOutsideClick';
+import { removeQuestionFromQuiz } from '../services/api';
 import {
   EyeIcon,
   ArrowPathIcon,
@@ -185,6 +186,24 @@ const QuizEdit = () => {
       use_default_prompt: revertedQuiz.use_default_prompt,
       custom_prompt: revertedQuiz.custom_prompt || ''
     });
+  };
+
+  const handleRemoveFromQuiz = async (questionId) => {
+    try {
+      const result = await removeQuestionFromQuiz(id, questionId);
+      if (result) {
+        toast.success('Question removed from quiz and moved to Question Bank');
+        
+        // Update the local quiz state to remove the question
+        setLocalQuiz(prev => ({
+          ...prev,
+          questions: prev.questions.filter(q => q.id !== questionId)
+        }));
+      }
+    } catch (error) {
+      toast.error('Failed to remove question from quiz');
+      console.error(error);
+    }
   };
 
   // Quick revert quiz to previous version
@@ -533,24 +552,25 @@ const QuizEdit = () => {
               
               {/* Questions List */}
               <div className="p-4 space-y-4">
-                <QuestionsList 
-                  questions={sortedQuestions}
-                  editingQuestionId={editingQuestionId}
-                  expandedQuestionId={expandedQuestionId}
-                  confirmDeleteId={confirmDeleteId}
-                  editingQuestionRef={editingQuestionRef}
-                  toggleQuestionExpand={toggleQuestionExpand}
-                  handleStartEditQuestion={handleStartEditQuestion}
-                  handleRegenerateQuestion={handleRegenerateQuestion}
-                  setConfirmDeleteId={setConfirmDeleteId}
-                  handleChangeQuestionType={handleChangeQuestionType}
-                  handleDeleteQuestion={handleDeleteQuestion}
-                  handleCancelEditQuestion={handleCancelEditQuestion}
-                  handleSaveQuestion={handleSaveQuestion}
-                  isGenerating={isGenerating}
-                  quizId={id}  // Pass the quiz ID
-                  regeneratingQuestions={regeneratingQuestions}
-                />
+              <QuestionsList 
+                questions={sortedQuestions}
+                editingQuestionId={editingQuestionId}
+                expandedQuestionId={expandedQuestionId}
+                confirmDeleteId={confirmDeleteId}
+                editingQuestionRef={editingQuestionRef}
+                toggleQuestionExpand={toggleQuestionExpand}
+                handleStartEditQuestion={handleStartEditQuestion}
+                handleRegenerateQuestion={handleRegenerateQuestion}
+                setConfirmDeleteId={setConfirmDeleteId}
+                handleChangeQuestionType={handleChangeQuestionType}
+                handleDeleteQuestion={handleDeleteQuestion}
+                handleCancelEditQuestion={handleCancelEditQuestion}
+                handleSaveQuestion={handleSaveQuestion}
+                handleRemoveFromQuiz={handleRemoveFromQuiz}
+                isGenerating={isGenerating}
+                quizId={id}
+                regeneratingQuestions={regeneratingQuestions}
+              />
                 
                 {/* New Question Form */}
                 {newQuestionMode && (
