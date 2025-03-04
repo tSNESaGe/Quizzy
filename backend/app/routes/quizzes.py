@@ -519,12 +519,20 @@ async def remove_question_from_quiz(
     )
     
     # Also record the action in quiz history
+    # Create a previous state for quiz action with question info
+    quiz_action_state = {
+        "removed_question": {
+            "id": question_id,
+            "text": question.question_text[:100] + ("..." if len(question.question_text) > 100 else "")
+        }
+    }
+    
     HistoryService.record_quiz_action(
         db=db,
         quiz_id=quiz_id,
         user_id=current_user.id,
         action=ActionType.REMOVE_QUESTION,
-        details=f"Removed question: {question.question_text[:50]}..."
+        previous_state=quiz_action_state  # Use previous_state instead of details
     )
     
     db.commit()

@@ -6,16 +6,16 @@ from sqlalchemy.orm import relationship
 from app.database import Base
 
 class ActionType(enum.Enum):
-    CREATE = "create"
-    UPDATE = "update"
-    DELETE = "delete"
-    REGENERATE = "regenerate"
-    REVERT = "revert"
-    ADD_QUIZ = "add_quiz"
-    REMOVE_QUIZ = "remove_quiz"
-    REORDER = "reorder"
-    REMOVE_FROM_QUIZ = "remove_from_quiz"
-    REMOVE_QUESTION = "remove_question"
+    CREATE = "CREATE"
+    UPDATE = "UPDATE"
+    DELETE = "DELETE"
+    REGENERATE = "REGENERATE"
+    REVERT = "REVERT"
+    ADD_QUIZ = "ADD_QUIZ"
+    REMOVE_QUIZ = "REMOVE_QUIZ"
+    REORDER = "REORDER"
+    REMOVE_FROM_QUIZ = "REMOVE_FROM_QUIZ"
+    REMOVE_QUESTION = "REMOVE_QUESTION"
 
 class QuizHistory(Base):
     __tablename__ = "quiz_history"

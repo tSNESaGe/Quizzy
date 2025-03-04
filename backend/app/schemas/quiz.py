@@ -66,7 +66,7 @@ class QuestionTypeChangeRequest(BaseModel):
 
 class Question(QuestionBase):
     id: int
-    quiz_id: int
+    quiz_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime
     answers: List[Answer]
