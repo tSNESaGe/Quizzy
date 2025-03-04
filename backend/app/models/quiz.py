@@ -24,10 +24,4 @@ class Quiz(Base):
     custom_prompt = Column(Text, nullable=True)
     
     # Source document tracking
-    document_sources = Column(JSON, nullable=True)  # Store file names and types
-    
-    # Relationships
-    questions = relationship("Question", back_populates="quiz", cascade="all, delete-orphan")
-    history = relationship("QuizHistory", back_populates="quiz", cascade="all, delete-orphan")
-    projects = relationship("ProjectQuiz", back_populates="quiz")
-
+    document_sources = Column(JSON, nullable=True) 

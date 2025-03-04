@@ -1,0 +1,60 @@
+version: '3'
+
+services:
+  postgres:
+    build:
+      context: ./postgres
+      dockerfile: Dockerfile
+    container_name: quiz_postgres
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
+    ports:
+      - "${DB_PORT}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -p 5432"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: quiz_backend
+    depends_on:
+      - postgres
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+    ports:
+      - "${APP_PORT}:8000"
+    volumes:
+      - ./backend:/app
+      - ./backend/${UPLOAD_FOLDER}:/app/${UPLOAD_FOLDER}
+    # command: uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT} --reload
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT} --reload
+  frontend:
+      build:
+        context: ./frontend
+        dockerfile: Dockerfile
+      container_name: quiz_frontend
+      ports:
+        - "${FRONTEND_PORT}:5173"
+      volumes:
+        - ./frontend:/app
+        - /app/node_modules
+      env_file:
+        - .env
+      command: ["yarn", "dev", "--host", "0.0.0.0"]
+
+volumes:
+  pg_data:
+    name: quiz_pgdata

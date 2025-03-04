@@ -34,7 +34,7 @@ app.include_router(history.router, prefix="/api/history", tags=["History"])
 
 # Mount uploads directory
 os.makedirs(settings.UPLOAD_FOLDER, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_FOLDER), name="uploads")
+app.mount(f"/{settings.UPLOAD_FOLDER}", StaticFiles(directory=settings.UPLOAD_FOLDER), name=settings.UPLOAD_FOLDER)
 
 @app.on_event("startup")
 async def startup_event():
@@ -52,4 +52,4 @@ async def health_check():
     return {"status": "healthy", "version": settings.VERSION}
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=settings.APP_PORT, reload=True)

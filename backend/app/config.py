@@ -3,29 +3,45 @@ import os
 from pathlib import Path
 from pydantic_settings import BaseSettings
 from pydantic import EmailStr, SecretStr, validator
-from typing import Optional
+from typing import Optional, List
 
 class Settings(BaseSettings):
     # Base
     PROJECT_NAME: str = "AI Quiz Generator"
-    VERSION: str = "0.1.0"
+    VERSION: str = "0.2.0"
     DESCRIPTION: str = "An AI-powered quiz generation application"
     
     # Database
-    DATABASE_URL: str = "sqlite:///./quiz_app.db"
+    DB_HOST: str = os.getenv("DB_HOST")
+    DB_PORT: int = int(os.getenv("DB_PORT"))
+    DB_USER: str = os.getenv("DB_USER")
+    DB_PASSWORD: str = os.getenv("DB_PASSWORD")
+    DB_NAME: str = os.getenv("DB_NAME")
+    DB_TYPE: str = os.getenv("DB_TYPE")
+    DATABASE_URL: str = os.getenv("DATABASE_URL")
+    APP_PORT: str = os.getenv("APP_PORT")
+    FRONTEND_PORT: str = os.getenv("FRONTEND_PORT")
+    # Constructed database URL
+    @property
+    def DATABASE_URL(self) -> str:
+        if not self.DATABASE_URL:
+            return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
     
     # Security
-    SECRET_KEY: str
+    SECRET_KEY: str = os.getenv("SECRET_KEY")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
     # Admin User (created on first run)
-    ADMIN_EMAIL: EmailStr
-    ADMIN_USERNAME: str
-    ADMIN_PASSWORD: SecretStr
+    ADMIN_EMAIL: EmailStr = os.getenv("ADMIN_EMAIL")
+    ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME")
+    ADMIN_PASSWORD: SecretStr = SecretStr(os.getenv("ADMIN_PASSWORD"))
     
     # AI Services
-    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
+    
+    # Embedding settings
+    EMBEDDING_DIMENSIONS: int = 1536
     
     # Default system prompt for quiz generation
     DEFAULT_QUIZ_PROMPT: str = """
@@ -40,20 +56,23 @@ class Settings(BaseSettings):
     """
     
     # File upload settings
-    UPLOAD_FOLDER: str = "uploads"
+    UPLOAD_FOLDER: str = os.getenv('UPLOAD_FOLDER')
     MAX_CONTENT_LENGTH: int = 16 * 1024 * 1024  # 16 MB
-    ALLOWED_EXTENSIONS: list = ["pdf", "docx", "doc", "txt", "html", "json"]
+    ALLOWED_EXTENSIONS: List[str] = ["pdf", "pptx", "docx", "doc", "txt", "html", "json"]
     
     # CORS settings
-    ALLOWED_ORIGINS: list = [
+    @property
+    def ALLOWED_ORIGINS(self) -> List[str]:
+        return [
         "http://localhost",
-        "http://localhost:5173",
+        f"http://localhost:{self.DB_PORT}",
+        f"http://localhost:{self.FRONTEND_PORT}",
         "http://localhost:3000",
-        "http://localhost:8000",
-    ]
+        f"http://localhost:{self.APP_PORT}"
+        ]
     
     class Config:
-        env_file = str(Path(__file__).resolve().parent.parent / ".env")
+        env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = True
 

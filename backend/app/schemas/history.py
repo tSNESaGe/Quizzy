@@ -14,6 +14,13 @@ class ActionType(str, Enum):
     REMOVE_QUIZ = "remove_quiz"
     REORDER = "reorder"
 
+# History filter model
+class HistoryFilter(BaseModel):
+    action_types: Optional[List[ActionType]] = None
+    entity_types: Optional[List[str]] = None  # "quiz", "question", "project"
+    date_from: Optional[str] = None  # ISO format date string
+    date_to: Optional[str] = None  # ISO format date string
+
 # Base History model
 class HistoryBase(BaseModel):
     action: ActionType
@@ -57,6 +64,26 @@ class HistorySummary(BaseModel):
     timestamp: datetime
     entity_type: str  # "quiz", "question", or "project"
     entity_id: int
+    entity_name: Optional[str] = None
+    parent_id: Optional[int] = None  # For questions, the parent quiz ID
+    parent_name: Optional[str] = None  # For questions, the parent quiz name
+    changes_summary: str  # Human-readable summary of changes
+    
+    class Config:
+        orm_mode = True
+        from_attributes = True
+
+# Detailed history response for a specific history entry
+class DetailedHistoryResponse(BaseModel):
+    id: int
+    action: ActionType
+    timestamp: datetime
+    entity_type: str
+    entity_id: int
+    entity_info: Optional[Dict[str, Any]] = None
+    user_id: int
+    changes: Dict[str, Any]  # Detailed changes
+    can_revert: bool
     
     class Config:
         orm_mode = True

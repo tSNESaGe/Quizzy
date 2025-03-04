@@ -115,3 +115,4 @@ class QuizGenerateRequest(BaseModel):
     document_ids: Optional[List[int]] = None
     use_default_prompt: bool = True
     custom_prompt: Optional[str] = None
+    use_embeddings: bool = True  # Option to use document embeddings for better context

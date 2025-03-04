@@ -2,11 +2,13 @@
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
+from sqlalchemy import desc
 from app.utils.conversion import convert_enum_to_string
 import json
 
 from app.database import get_db
 from app.models.quiz import Quiz
+from app.models.document import Document
 from app.models.question import Question, Answer, QuestionType
 from app.models.history import QuizHistory, QuestionHistory, ActionType
 from app.schemas.quiz import (
@@ -47,7 +49,8 @@ async def generate_quiz(
         topic=request.topic,
         num_questions=request.num_questions,
         document_ids=request.document_ids,
-        custom_prompt=request.custom_prompt if not request.use_default_prompt else None
+        custom_prompt=request.custom_prompt if not request.use_default_prompt else None,
+        use_embeddings=request.use_embeddings
     )
     
     if not questions_data:
@@ -121,7 +124,7 @@ def get_user_quizzes(
     """
     Get all quizzes for the current user
     """
-    quizzes = db.query(Quiz).filter(Quiz.user_id == current_user.id).offset(skip).limit(limit).all()
+    quizzes = db.query(Quiz).filter(Quiz.user_id == current_user.id).order_by(desc(Quiz.updated_at)).offset(skip).limit(limit).all()
     convert_enum_to_string(quizzes)
     return quizzes
 
@@ -235,6 +238,7 @@ def delete_quiz(
 @router.post("/{quiz_id}/regenerate", response_model=QuizSchema)
 async def regenerate_quiz(
     quiz_id: int,
+    use_embeddings: bool = Query(True),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -269,13 +273,17 @@ async def regenerate_quiz(
     # Get number of questions to regenerate
     num_questions = len(quiz.questions) or 10
     
+    # Extract document IDs if available
+    document_ids = quiz.document_sources.get("document_ids") if quiz.document_sources else None
+    
     # Generate new questions
     questions_data = await ai_service.generate_quiz(
         db,
         topic=quiz.topic,
         num_questions=num_questions,
-        document_ids=quiz.document_sources.get("document_ids") if quiz.document_sources else None,
-        custom_prompt=quiz.custom_prompt if not quiz.use_default_prompt else None
+        document_ids=document_ids,
+        custom_prompt=quiz.custom_prompt if not quiz.use_default_prompt else None,
+        use_embeddings=use_embeddings
     )
     
     if not questions_data:
@@ -421,11 +429,12 @@ async def delete_question(
 async def regenerate_question(
     quiz_id: int,
     question_id: int,
+    use_document_content: bool = Query(True),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Regenerate a specific question in a quiz
+    Regenerate a specific question in a quiz with document content support
     """
     # Verify quiz belongs to user and exists
     quiz = db.query(Quiz).filter(Quiz.id == quiz_id, Quiz.user_id == current_user.id).first()
@@ -453,12 +462,57 @@ async def regenerate_question(
         ]
     }
     
+    # Get document content if requested and available
+    document_content = None
+    if use_document_content and quiz.document_sources and "document_ids" in quiz.document_sources:
+        document_ids = quiz.document_sources["document_ids"]
+        if document_ids:
+            # Get relevant content from document embeddings
+            try:
+                # Use embedding service to find relevant content
+                from app.services.embedding import EmbeddingService, DocumentChunk
+                embedding_service = EmbeddingService()
+                
+                # Check if any documents have chunks
+                has_embeddings = db.query(DocumentChunk).filter(
+                    DocumentChunk.document_id.in_(document_ids)
+                ).count() > 0
+                
+                if has_embeddings:
+                    # Use question text as query to find relevant content
+                    relevant_chunks = await embedding_service.find_relevant_chunks(
+                        db=db,
+                        query=question.question_text,
+                        top_k=5,
+                        document_ids=document_ids
+                    )
+                    
+                    if relevant_chunks:
+                        document_content = "\n\n".join([chunk["text"] for chunk in relevant_chunks])
+                
+                # If no embeddings or chunks found, use traditional approach
+                if not document_content:
+                    # Get full document content (limited)
+                    documents = db.query(Document).filter(Document.id.in_(document_ids)).all()
+                    contents = []
+                    
+                    for doc in documents:
+                        # Limit size to avoid context issues
+                        doc_content = doc.content[:3000] + "..." if len(doc.content) > 3000 else doc.content
+                        contents.append(f"--- From {doc.filename} ---\n{doc_content}")
+                    
+                    if contents:
+                        document_content = "\n\n".join(contents)
+            except Exception as e:
+                print(f"Error getting document content: {str(e)}")
+    
     # Generate a new question
     question_data = await ai_service.regenerate_question(
         topic=quiz.topic,
         question_index=question.position,
         question_type=question.question_type.value,
-        custom_prompt=quiz.custom_prompt if not quiz.use_default_prompt else None
+        custom_prompt=quiz.custom_prompt if not quiz.use_default_prompt else None,
+        document_content=document_content
     )
     
     if not question_data:
@@ -505,6 +559,7 @@ async def change_question_type(
     quiz_id: int,
     question_id: int,
     type_request: QuestionTypeChangeRequest,
+    use_document_content: bool = Query(True),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -549,12 +604,57 @@ async def change_question_type(
         "position": question.position
     }
     
+    # Get document content if requested and available
+    document_content = None
+    if use_document_content and quiz.document_sources and "document_ids" in quiz.document_sources:
+        document_ids = quiz.document_sources["document_ids"]
+        if document_ids:
+            # Get relevant content from document embeddings
+            try:
+                # Use embedding service to find relevant content
+                from app.services.embedding import EmbeddingService, DocumentChunk
+                embedding_service = EmbeddingService()
+                
+                # Check if any documents have chunks
+                has_embeddings = db.query(DocumentChunk).filter(
+                    DocumentChunk.document_id.in_(document_ids)
+                ).count() > 0
+                
+                if has_embeddings:
+                    # Use question text as query to find relevant content
+                    relevant_chunks = await embedding_service.find_relevant_chunks(
+                        db=db,
+                        query=question.question_text,
+                        top_k=5,
+                        document_ids=document_ids
+                    )
+                    
+                    if relevant_chunks:
+                        document_content = "\n\n".join([chunk["text"] for chunk in relevant_chunks])
+                
+                # If no embeddings or chunks found, use traditional approach
+                if not document_content:
+                    # Get full document content (limited)
+                    documents = db.query(Document).filter(Document.id.in_(document_ids)).all()
+                    contents = []
+                    
+                    for doc in documents:
+                        # Limit size to avoid context issues
+                        doc_content = doc.content[:3000] + "..." if len(doc.content) > 3000 else doc.content
+                        contents.append(f"--- From {doc.filename} ---\n{doc_content}")
+                    
+                    if contents:
+                        document_content = "\n\n".join(contents)
+            except Exception as e:
+                print(f"Error getting document content: {str(e)}")
+    
     # Use AI to change question type and generate new answers
     new_question_data = await ai_service.change_question_type(
         question_data=question_data,
         new_type=type_request.question_type,
         topic=quiz.topic,
-        custom_prompt=quiz.custom_prompt if not quiz.use_default_prompt else None
+        custom_prompt=quiz.custom_prompt if not quiz.use_default_prompt else None,
+        document_content=document_content
     )
     
     if not new_question_data:

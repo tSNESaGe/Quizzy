@@ -1,54 +1,104 @@
 # backend/app/database.py
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
 
+import os
+import sqlalchemy as sa
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 from app.config import settings
 
-# Create SQLAlchemy engine
-engine = create_engine(
-    settings.DATABASE_URL, 
-    connect_args={"check_same_thread": False} if settings.DATABASE_URL.startswith("sqlite") else {}
-)
-
-# Create session factory
+engine = create_engine(settings.DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Create base class for models
 Base = declarative_base()
 
-# Dependency to get DB session
 def get_db():
+    """Dependency to get DB session in FastAPI routes."""
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
+
 def init_enums():
-    """Ensure enum types are correctly registered"""
-    from sqlalchemy import Enum
-    from app.models.question import QuestionType
-    
-    # This ensures SQLAlchemy knows about the enum values
-    Enum(QuestionType).create(bind=engine, checkfirst=True)
+    """
+    Ensure enum types are correctly registered (if you’re using SQLAlchemy Enums).
+    For example:
+      from sqlalchemy import Enum
+      from app.models.question import QuestionType
+      from app.models.history import ActionType
+
+      Enum(QuestionType).create(bind=engine, checkfirst=True)
+      Enum(ActionType).create(bind=engine, checkfirst=True)
+    """
+    pass
+
 
 def init_db():
+    """
+    Initialize database with tables and any necessary Postgres extensions.
+    """
+    # For Postgres, enable pgvector if needed:
+    try:
+        with engine.connect() as conn:
+            conn.execute(sa.text("CREATE EXTENSION IF NOT EXISTS vector;"))
+            conn.commit()
+            print("pgvector extension enabled (if Postgres user has permissions).")
+    except Exception as e:
+        print(f"Warning: Could not enable pgvector extension: {e}")
+
+    # Create any enum types
+    init_enums()
+
+    # Import all models - using the __init__.py to handle circular dependencies
     from app.models import user, quiz, question, document, project, history
     
-    init_enums()
-    
-    # Create tables
+    # Make sure the module is imported which sets up all relationships
+    import app.models
+
+    # Create all tables
     Base.metadata.create_all(bind=engine)
 
-# Function to create initial admin user
+    # Optionally create an index on vector columns (if using pgvector)
+    try:
+        with engine.connect() as conn:
+            # First check if the vector extension exists
+            has_vector = conn.execute(sa.text(
+                "SELECT 1 FROM pg_extension WHERE extname = 'vector'"
+            )).scalar() is not None
+            
+            if has_vector:
+                # Now check if the document_chunks table exists
+                has_table = conn.execute(sa.text(
+                    "SELECT 1 FROM information_schema.tables WHERE table_name='document_chunks'"
+                )).scalar() is not None
+                
+                if has_table:
+                    conn.execute(sa.text(
+                        "CREATE INDEX IF NOT EXISTS document_chunks_embedding_idx "
+                        "ON document_chunks USING ivfflat (embedding vector_l2_ops) WITH (lists = 100);"
+                    ))
+                    conn.commit()
+                    print("Vector index created successfully.")
+                else:
+                    print("Skipping vector index creation as document_chunks table doesn't exist yet.")
+            else:
+                print("Skipping vector index creation as vector extension is not available.")
+    except Exception as e:
+        print(f"Warning: Could not create vector index: {e}")
+
+    print("Database initialized successfully")
+
+
 def create_admin_user():
+    """
+    Create initial admin user if it doesn’t exist yet.
+    """
     from app.models.user import User
     from app.services.auth import get_password_hash
-    from sqlalchemy.orm import Session
-    
+
     db = SessionLocal()
     try:
-        # Check if admin user already exists
         admin = db.query(User).filter(User.email == settings.ADMIN_EMAIL).first()
         if not admin:
             admin = User(
@@ -63,6 +113,6 @@ def create_admin_user():
             db.commit()
             print(f"Admin user created: {settings.ADMIN_USERNAME}")
         else:
-            print(f"Admin user already exists: {settings.ADMIN_USERNAME}")
+            print("Admin user already exists.")
     finally:
         db.close()

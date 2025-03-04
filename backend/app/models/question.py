@@ -26,7 +26,6 @@ class Question(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    quiz = relationship("Quiz", back_populates="questions")
     answers = relationship("Answer", back_populates="question", cascade="all, delete-orphan")
     history = relationship("QuestionHistory", back_populates="question", cascade="all, delete-orphan")
 

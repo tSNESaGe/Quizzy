@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.document import Document
 from app.models.question import QuestionType
+from app.services.embedding import EmbeddingService, DocumentChunk
 from app.config import settings
 
 class AIService:
@@ -15,9 +16,10 @@ class AIService:
         # Initialize the Gemini API
         genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
         self.model = genai.GenerativeModel('gemini-1.5-pro')
+        self.embedding_service = EmbeddingService()
         
         # Detailed system prompt for quiz generation
-        self.default_quiz_prompt = self.default_quiz_prompt = """
+        self.default_quiz_prompt = """
             Your task is to generate a comprehensive quiz based on the provided topic or document content. 
             Follow these guidelines carefully:
 
@@ -26,6 +28,8 @@ class AIService:
             - Create questions directly related to the topic
             - Ensure questions test comprehension and critical thinking
             - Mix difficulty levels (easy, medium, challenging)
+            - IMPORTANT: Your questions must be directly based on the provided document content, 
+              don't make up facts not present in the documents.
 
             2. Question Type Distribution:
             - 20% of questions should be boolean (true/false) type
@@ -63,7 +67,8 @@ class AIService:
         topic: str,
         num_questions: int = 10,
         document_ids: Optional[List[int]] = None,
-        custom_prompt: Optional[str] = None
+        custom_prompt: Optional[str] = None,
+        use_embeddings: bool = True
     ) -> List[Dict[str, Any]]:
         """
         Generate quiz questions using Gemini AI based on a topic or documents
@@ -71,21 +76,71 @@ class AIService:
         # Prepare content from documents if provided
         document_content = ""
         document_sources = []
+        relevant_chunks_info = []
+        
         if document_ids:
-            documents = db.query(Document).filter(Document.id.in_(document_ids)).all()
-            for doc in documents:
-                document_content += f"\n\n--- Content from {doc.filename} ---\n{doc.content}"
-                document_sources.append({"id": doc.id, "filename": doc.filename, "type": doc.file_type})
+            # If using embeddings, find the most relevant chunks
+            if use_embeddings:
+                # Check if any of the documents have embeddings
+                chunk_count = db.query(DocumentChunk).filter(
+                    DocumentChunk.document_id.in_(document_ids)
+                ).count()
+                
+                # Only use embeddings if they exist
+                if chunk_count > 0:
+                    relevant_chunks = await self.embedding_service.find_relevant_chunks(
+                        db=db,
+                        query=topic,
+                        top_k=15,  # Retrieve more chunks for better coverage
+                        document_ids=document_ids
+                    )
+                    
+                    if relevant_chunks:
+                        # Sort documents by similarity score
+                        relevant_chunks.sort(key=lambda x: x["similarity"], reverse=True)
+                        
+                        # Store info about the chunks for response metadata
+                        for chunk in relevant_chunks:
+                            doc = db.query(Document).filter(Document.id == chunk["document_id"]).first()
+                            if doc:
+                                document_content += f"\n\n--- Content from {doc.filename} (relevance: {chunk['similarity']:.2f}) ---\n{chunk['text']}"
+                                
+                                # Add to relevant chunks info
+                                relevant_chunks_info.append({
+                                    "document_id": doc.id,
+                                    "document_name": doc.filename,
+                                    "chunk_text": chunk["text"][:100] + "...",
+                                    "similarity": chunk["similarity"]
+                                })
+                                
+                                # Keep track of source documents
+                                if {"id": doc.id, "filename": doc.filename, "type": doc.file_type} not in document_sources:
+                                    document_sources.append({"id": doc.id, "filename": doc.filename, "type": doc.file_type})
+            
+            # Fallback to using full documents if no chunks found or not using embeddings
+            if not document_content:
+                documents = db.query(Document).filter(Document.id.in_(document_ids)).all()
+                for doc in documents:
+                    # Extract most important content
+                    extracted_content = self._extract_important_content(doc.content, max_length=8000)
+                    document_content += f"\n\n--- Content from {doc.filename} ---\n{extracted_content}"
+                    document_sources.append({"id": doc.id, "filename": doc.filename, "type": doc.file_type})
         
         # Build the final prompt
-        prompt = f"{self.default_quiz_prompt}\n\n"
+        system_prompt = custom_prompt or self.default_quiz_prompt
+        
+        # Enhanced prompt with focus on document content
+        prompt = f"{system_prompt}\n\n"
         prompt += f"Topic: {topic}\n"
         prompt += f"Number of questions: {num_questions}\n\n"
-        prompt += f"User specific request: {custom_prompt or ''}\n\n"
         
         if document_content:
+            # Add indicator for content source to help answer generation
+            prompt += "IMPORTANT: The following document content MUST be the primary source for generating quiz questions.\n"
+            prompt += "Use this content to create specific, accurate questions and do not introduce facts not present in these documents.\n\n"
+            
             # Truncate if too large to fit in context window
-            max_content_length = 50000  # Adjust based on Gemini's limits
+            max_content_length = 65000  # Adjusted for Gemini's limits
             if len(document_content) > max_content_length:
                 document_content = document_content[:max_content_length] + "..."
             
@@ -99,20 +154,139 @@ class AIService:
             
             # Parse and validate the response
             questions_data = self._extract_and_parse_json(response)
+            
+            # If extraction failed, try one more time with a simplified prompt
+            if not questions_data or not isinstance(questions_data, list):
+                simplified_prompt = f"""
+                Create {num_questions} quiz questions about {topic} based on the provided document content.
+                Mix of multiple choice (80%) and true/false (20%) questions.
+                
+                Respond with a JSON array of questions following this format:
+                [{{"question_text": "", "question_type": "multiple_choice", "explanation": "", "position": 0, "answers": [
+                    {{"answer_text": "", "is_correct": true, "position": 0}}, 
+                    {{"answer_text": "", "is_correct": false, "position": 1}}
+                ]}}]
+                
+                Document content:
+                {document_content[:30000] if document_content else 'No specific content provided, use general knowledge.'}
+                """
+                
+                response = await self._generate_content(simplified_prompt)
+                questions_data = self._extract_and_parse_json(response)
+            
             # Validate and fix questions
             validated_questions = self._validate_and_fix_questions(questions_data, num_questions)
+            
+            # Add metadata about document sources if used
+            for question in validated_questions:
+                question["document_sources"] = document_sources
+                
+                # If using embeddings, add relevant chunk info to questions
+                if use_embeddings and relevant_chunks_info:
+                    question["relevant_chunks"] = relevant_chunks_info
+            
             return validated_questions
             
         except Exception as e:
             print(f"Error generating quiz: {str(e)}")
             return []
     
+    def _extract_important_content(self, text: str, max_length: int = 8000) -> str:
+        """
+        Extract the most important content from a document to fit within context window
+        Uses heuristics to focus on structured and information-rich sections
+        """
+        if len(text) <= max_length:
+            return text
+        
+        # Split into paragraphs
+        paragraphs = text.split('\n\n')
+        
+        # Score each paragraph for importance
+        scored_paragraphs = []
+        for p in paragraphs:
+            if not p.strip():
+                continue
+            
+            # Calculate score based on heuristics
+            score = 0
+            
+            # Higher score for paragraphs with titles/headers
+            if re.match(r'^#+\s+', p) or p.isupper() or p.endswith(':'):
+                score += 10
+            
+            # Higher score for paragraphs with numbers (likely important data)
+            if re.search(r'\d+', p):
+                score += 5
+            
+            # Higher score for longer paragraphs (likely more content)
+            score += min(len(p.split()) / 10, 5)
+            
+            # Higher score for paragraphs with keywords (customize based on domain)
+            important_keywords = ['important', 'key', 'significant', 'critical', 'essential',
+                                 'summary', 'conclusion', 'result', 'finding']
+            for keyword in important_keywords:
+                if keyword in p.lower():
+                    score += 3
+            
+            # Higher score for structured content (lists, etc.)
+            if re.search(r'^\s*[-*•]\s+', p, re.MULTILINE):
+                score += 5
+            
+            scored_paragraphs.append((p, score))
+        
+        # Sort by score (descending)
+        scored_paragraphs.sort(key=lambda x: x[1], reverse=True)
+        
+        # Select paragraphs until we reach max_length
+        selected_paragraphs = []
+        current_length = 0
+        
+        # Always include first paragraph (introductory)
+        if paragraphs and paragraphs[0].strip():
+            intro = paragraphs[0]
+            selected_paragraphs.append(intro)
+            current_length += len(intro) + 2  # +2 for newlines
+        
+        for p, score in scored_paragraphs:
+            if p in selected_paragraphs:
+                continue
+                
+            if current_length + len(p) + 2 <= max_length:
+                selected_paragraphs.append(p)
+                current_length += len(p) + 2
+            else:
+                # If we can't fit the whole paragraph, check if we can fit a summary
+                if len(p) > 100:
+                    summary = p[:97] + "..."
+                    remaining_space = max_length - current_length
+                    if len(summary) <= remaining_space:
+                        selected_paragraphs.append(summary)
+                        current_length += len(summary) + 2
+                        
+                # Break if we're close to the limit
+                if current_length >= max_length * 0.95:
+                    break
+        
+        # If we still have space, try to include conclusion paragraphs
+        if current_length < max_length * 0.9 and len(paragraphs) > 5:
+            conclusion_candidates = paragraphs[-3:]  # Last 3 paragraphs
+            for p in conclusion_candidates:
+                if p not in selected_paragraphs:
+                    if current_length + len(p) + 2 <= max_length:
+                        selected_paragraphs.append(p)
+                        current_length += len(p) + 2
+        
+        # Return the selected content
+        return '\n\n'.join(selected_paragraphs)
+    
     async def regenerate_question(
         self,
         topic: str,
         question_index: int,
         question_type: str,
-        custom_prompt: Optional[str] = None
+        custom_prompt: Optional[str] = None,
+        document_content: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Regenerate a single question
@@ -126,9 +300,13 @@ class AIService:
         Topic: {topic}
         Question Number: {question_index}
         Question Type: {question_type}
-        
-        Respond ONLY with a valid JSON object for the question.
         """
+        
+        # Add document content if provided
+        if document_content:
+            prompt += f"\n\nUse the following document content as your source:\n{document_content}\n"
+        
+        prompt += "\nRespond ONLY with a valid JSON object for the question."
         
         try:
             response = await self._generate_content(prompt)
@@ -154,7 +332,8 @@ class AIService:
         question_data: Dict[str, Any],
         new_type: str,
         topic: str,
-        custom_prompt: Optional[str] = None
+        custom_prompt: Optional[str] = None,
+        document_content: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Change a question's type (boolean/multiple choice) and regenerate appropriate answers
@@ -174,9 +353,13 @@ class AIService:
         For boolean, provide True/False options with exactly one correct answer.
         For multiple choice, provide 4 options with exactly one correct answer.
         Include a brief explanation of the correct answer.
-        
-        Respond ONLY with a valid JSON object.
         """
+        
+        # Add document content if provided
+        if document_content:
+            prompt += f"\n\nUse the following document content as your source:\n{document_content}\n"
+        
+        prompt += "\nRespond ONLY with a valid JSON object."
         
         try:
             response = await self._generate_content(prompt)
