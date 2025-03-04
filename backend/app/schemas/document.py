@@ -32,7 +32,9 @@ class DocumentSummary(BaseModel):
     file_type: str
     created_at: datetime
     content_preview: Optional[str] = None
-    
+    full_content: Optional[str] = None
+    markdown: Optional[str] = None
+
     class Config:
         orm_mode = True
         from_attributes = True

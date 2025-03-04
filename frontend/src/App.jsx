@@ -1,4 +1,4 @@
-// frontend/src/App.jsx
+// frontend/src/App.jsx - Update with document detail route
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from 'react-query';
@@ -18,9 +18,11 @@ import QuizPreview from './pages/QuizPreview';
 import ProjectList from './pages/ProjectList';
 import ProjectEdit from './pages/ProjectEdit';
 import DocumentList from './pages/DocumentList';
+import DocumentDetail from './pages/DocumentDetail'; // Add this import
 import Settings from './pages/Settings';
+import QuestionBank from './pages/QuestionBank';
 
-// New Pages
+// New Pages with Enhanced Components
 import NewQuizCreate from './pages/NewQuizCreate';
 
 // Auth components
@@ -91,6 +93,9 @@ function App() {
                   <Route path=":id/preview" element={<QuizPreview />} />
                 </Route>
                 
+                {/* Question Bank Route */}
+                <Route path="question-bank" element={<QuestionBank />} />
+                
                 {/* Project Routes */}
                 <Route path="projects">
                   <Route index element={<ProjectList />} />
@@ -101,6 +106,7 @@ function App() {
                 {/* Document Routes */}
                 <Route path="documents">
                   <Route index element={<DocumentList />} />
+                  <Route path=":id" element={<DocumentDetail />} />
                 </Route>
                 
                 <Route path="settings" element={<Settings />} />

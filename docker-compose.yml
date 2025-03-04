@@ -39,8 +39,7 @@ services:
       - ./backend:/app
       - ./backend/${UPLOAD_FOLDER}:/app/${UPLOAD_FOLDER}
     # command: uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT} --reload
-    command: >
-      uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT} --reload
+    command: sh -c "/wait && python -m app.db_migrations && uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT} --reload"
   frontend:
       build:
         context: ./frontend

@@ -1,33 +1,40 @@
 // frontend/src/components/quiz/QuizBuilder.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import useAppStore from '../../store/appStore';
+import { Helmet } from 'react-helmet-async';
 import { toast } from 'react-hot-toast';
-import { 
-  DocumentTextIcon, 
-  PlusCircleIcon, 
-  CheckCircleIcon,
+import useAppStore from '../../store/appStore';
+import { getDocuments } from '../../services/api';
+import Button from '../common/Button';
+import FileUpload from '../common/FileUpload';
+import {
+  DocumentTextIcon,
+  DocumentPlusIcon,
   ArrowPathIcon,
   ChevronRightIcon,
   ChevronLeftIcon,
-  DocumentPlusIcon
+  CheckIcon,
+  ExclamationCircleIcon,
+  LightBulbIcon,
+  PaperAirplaneIcon
 } from '@heroicons/react/24/outline';
-import FileUpload from '../common/FileUpload';
-import Button from '../common/Button';
 
-const QuizBuilder = () => {
+const QuizBuilder = ({ initialSelectedDocuments = [] }) => {
   const navigate = useNavigate();
-  const { 
-    documents, 
-    fetchDocuments, 
+  const {
+    documents,
+    setDocuments,
+    fetchDocuments,
     generateQuiz,
     clearError,
     isGenerating,
     error
   } = useAppStore();
 
-  // Form state
+  // Multi-step form state
   const [currentStep, setCurrentStep] = useState(1);
+
+  // Form state
   const [quizData, setQuizData] = useState({
     title: '',
     topic: '',
@@ -37,19 +44,51 @@ const QuizBuilder = () => {
     custom_prompt: '',
     use_embeddings: true
   });
-  
+
   // UI state
+  const [documentsExpanded, setDocumentsExpanded] = useState(true);
+  const [uploadPanelExpanded, setUploadPanelExpanded] = useState(false);
   const [documentUploaded, setDocumentUploaded] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [suggestedTopic, setSuggestedTopic] = useState('');
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   // Fetch documents on component mount
   useEffect(() => {
-    fetchDocuments();
+    const loadDocuments = async () => {
+      const docs = await fetchDocuments();
+      if (docs && docs.length > 0) {
+        setDocumentsExpanded(true);
+      } else {
+        setUploadPanelExpanded(true);
+      }
+    };
+    
+    loadDocuments();
     clearError();
     
     return () => clearError();
   }, [fetchDocuments, clearError]);
+
+  // Add this useEffect to handle initial document selection
+  useEffect(() => {
+    if (initialSelectedDocuments.length > 0) {
+      setQuizData(prev => ({
+        ...prev,
+        document_ids: initialSelectedDocuments
+      }));
+
+      // Optional: Automatically expand documents section if pre-selected
+      setDocumentsExpanded(true);
+    }
+  }, [initialSelectedDocuments]);
+  // Helper function to check if a document is uploaded recently
+  const isRecentlyUploaded = useCallback((doc) => {
+    const now = new Date();
+    const uploadTime = new Date(doc.created_at);
+    const differenceInMinutes = (now - uploadTime) / (1000 * 60);
+    return differenceInMinutes < 5; // Consider "recent" if uploaded within the last 5 minutes
+  }, []);
 
   // Handle document selection
   const handleDocumentSelect = (docId) => {
@@ -68,6 +107,7 @@ const QuizBuilder = () => {
   // Handle document upload success
   const handleDocumentUpload = (uploadedDocs) => {
     setDocumentUploaded(true);
+    setUploadProgress(100);
     
     // Automatically select newly uploaded documents
     if (uploadedDocs && uploadedDocs.length > 0) {
@@ -92,27 +132,81 @@ const QuizBuilder = () => {
     }
   };
 
-  // Extract topic from document content (simple heuristic)
+  // Progress simulation for upload
+  const handleUploadStart = () => {
+    setUploadProgress(0);
+    const interval = setInterval(() => {
+      setUploadProgress(prev => {
+        const newProgress = prev + Math.floor(Math.random() * 10);
+        if (newProgress >= 90) {
+          clearInterval(interval);
+          return 90;
+        }
+        return newProgress;
+      });
+    }, 300);
+  };
+
+  // Extract topic from document content
   const attemptToExtractTopic = (document) => {
     if (!document || !document.content) return;
     
     setIsAnalyzing(true);
     
     try {
-      // Simple approach: Take first sentence or up to 100 chars
-      const content = document.content;
-      const firstSentence = content.split('.')[0];
-      const topic = firstSentence.length > 100 
-        ? firstSentence.substring(0, 100) + '...'
-        : firstSentence;
+      // Simple approach using document content
+      const extractTopic = (content) => {
+        // Look for title-like content at the beginning
+        const firstFewLines = content.split('\n').slice(0, 5).join(' ');
+        const firstLine = firstFewLines.split('.')[0];
+        
+        // Extract key phrases that might be topics
+        const possibleTopics = [];
+        
+        // Pattern: Look for "Introduction to X" or "X Guide" or similar patterns
+        const introPattern = /introduction to ([\w\s]+)/i;
+        const introMatch = content.match(introPattern);
+        if (introMatch && introMatch[1]) {
+          possibleTopics.push(introMatch[1]);
+        }
+        
+        // Pattern: Look for section headers
+        const sectionPattern = /(?:^|\n)##?\s+([\w\s]+)/;
+        const sectionMatch = content.match(sectionPattern);
+        if (sectionMatch && sectionMatch[1]) {
+          possibleTopics.push(sectionMatch[1]);
+        }
+        
+        // Pattern: Look for keywords
+        const keywords = ['javascript', 'python', 'react', 'node', 'history', 'science', 'biology', 'physics', 'chemistry', 'literature'];
+        for (const keyword of keywords) {
+          if (content.toLowerCase().includes(keyword)) {
+            possibleTopics.push(keyword);
+            break;
+          }
+        }
+        
+        // If we found some potential topics, use the first one
+        if (possibleTopics.length > 0) {
+          return possibleTopics[0].trim();
+        }
+        
+        // Fallback to first line or a portion of it
+        if (firstLine.length > 50) {
+          return firstLine.substring(0, 50) + '...';
+        }
+        
+        return firstLine || 'Unknown Topic';
+      };
       
-      setSuggestedTopic(topic);
+      const extractedTopic = extractTopic(document.content);
+      setSuggestedTopic(extractedTopic);
       
       // Auto-fill topic if empty
       if (!quizData.topic) {
         setQuizData(prev => ({
           ...prev,
-          topic: topic
+          topic: extractedTopic
         }));
       }
     } catch (err) {
@@ -202,64 +296,211 @@ const QuizBuilder = () => {
     }
   };
 
+  // Format date for documents
+  const formatDate = (dateString) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  };
+
+  // File type icons and classes
+  const getFileTypeInfo = (fileType) => {
+    const types = {
+      'pdf': { icon: 'pdf', bgColor: 'bg-red-100', textColor: 'text-red-700' },
+      'docx': { icon: 'docx', bgColor: 'bg-blue-100', textColor: 'text-blue-700' },
+      'doc': { icon: 'doc', bgColor: 'bg-blue-100', textColor: 'text-blue-700' },
+      'txt': { icon: 'txt', bgColor: 'bg-gray-100', textColor: 'text-gray-700' },
+      'html': { icon: 'html', bgColor: 'bg-orange-100', textColor: 'text-orange-700' },
+      'json': { icon: 'json', bgColor: 'bg-yellow-100', textColor: 'text-yellow-700' }
+    };
+    
+    return types[fileType] || { icon: 'file', bgColor: 'bg-gray-100', textColor: 'text-gray-700' };
+  };
+
   // Render Step 1: Document Selection
   const renderStep1 = () => (
     <div className="space-y-6">
       <h2 className="text-xl font-semibold text-gray-800">Select Document Source</h2>
       
-      <div className="bg-white rounded-lg shadow p-6">
-        <h3 className="text-lg font-medium mb-4">Upload New Document</h3>
-        <FileUpload onUploadSuccess={handleDocumentUpload} />
+      {/* Document Upload Section */}
+      <div className="bg-white rounded-lg shadow-md">
+        <div 
+          className="p-4 border-b cursor-pointer"
+          onClick={() => setUploadPanelExpanded(!uploadPanelExpanded)}
+        >
+          <div className="flex justify-between items-center">
+            <h3 className="text-lg font-medium flex items-center">
+              <DocumentPlusIcon className="h-5 w-5 text-primary-600 mr-2" />
+              Upload New Document
+            </h3>
+            <ChevronRightIcon className={`h-5 w-5 text-gray-400 transition-transform ${uploadPanelExpanded ? 'rotate-90' : ''}`} />
+          </div>
+        </div>
         
-        {documentUploaded && (
-          <div className="mt-4 p-3 bg-green-100 text-green-800 rounded-md flex items-center">
-            <CheckCircleIcon className="h-5 w-5 mr-2" />
-            Document uploaded successfully. It will appear in the list below.
+        {uploadPanelExpanded && (
+          <div className="p-6">
+            <FileUpload 
+              onUploadSuccess={handleDocumentUpload}
+              onUploadStart={handleUploadStart}
+            />
+            
+            {uploadProgress > 0 && uploadProgress < 100 && (
+              <div className="mt-4">
+                <div className="w-full bg-gray-200 rounded-full h-2.5">
+                  <div 
+                    className="bg-primary-600 h-2.5 rounded-full transition-all duration-300"
+                    style={{ width: `${uploadProgress}%` }}
+                  ></div>
+                </div>
+                <p className="text-center text-sm text-gray-600 mt-2">
+                  Uploading and processing document... {uploadProgress}%
+                </p>
+              </div>
+            )}
+            
+            {documentUploaded && (
+              <div className="mt-4 p-3 bg-green-100 text-green-800 rounded-md flex items-center">
+                <CheckIcon className="h-5 w-5 mr-2" />
+                Document uploaded successfully. It will appear in the list below.
+              </div>
+            )}
           </div>
         )}
       </div>
       
-      <div className="bg-white rounded-lg shadow p-6">
-        <h3 className="text-lg font-medium mb-4">Your Documents</h3>
-        
-        {documents.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
-            <DocumentPlusIcon className="h-12 w-12 mx-auto text-gray-400 mb-3" />
-            <p>You have no documents yet. Upload one above.</p>
+      {/* Document List Section */}
+      <div className="bg-white rounded-lg shadow-md">
+        <div 
+          className="p-4 border-b cursor-pointer"
+          onClick={() => setDocumentsExpanded(!documentsExpanded)}
+        >
+          <div className="flex justify-between items-center">
+            <h3 className="text-lg font-medium flex items-center">
+              <DocumentTextIcon className="h-5 w-5 text-primary-600 mr-2" />
+              Your Documents
+              {quizData.document_ids.length > 0 && (
+                <span className="ml-2 bg-primary-100 text-primary-800 text-xs font-medium px-2.5 py-0.5 rounded">
+                  {quizData.document_ids.length} selected
+                </span>
+              )}
+            </h3>
+            <ChevronRightIcon className={`h-5 w-5 text-gray-400 transition-transform ${documentsExpanded ? 'rotate-90' : ''}`} />
           </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {documents.map(doc => (
-              <div 
-                key={doc.id}
-                onClick={() => handleDocumentSelect(doc.id)}
-                className={`
-                  border rounded-lg p-4 cursor-pointer transition-all
-                  ${quizData.document_ids.includes(doc.id) 
-                    ? 'border-blue-500 bg-blue-50 shadow-md' 
-                    : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'}
-                `}
-              >
-                <div className="flex items-start">
-                  <div className="flex-shrink-0">
-                    <DocumentTextIcon className="h-6 w-6 text-gray-400" />
-                  </div>
-                  <div className="ml-3 flex-1">
-                    <div className="text-sm font-medium text-gray-900 truncate">
-                      {doc.filename}
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      {doc.file_type.toUpperCase()} · {new Date(doc.created_at).toLocaleDateString()}
-                    </div>
-                  </div>
-                  {quizData.document_ids.includes(doc.id) && (
-                    <CheckCircleIcon className="h-5 w-5 text-blue-600" />
-                  )}
-                </div>
+        </div>
+        
+        {documentsExpanded && (
+          <div className="p-6">
+            {documents.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <DocumentPlusIcon className="h-12 w-12 mx-auto text-gray-400 mb-3" />
+                <p>You have no documents yet. Upload one above.</p>
               </div>
-            ))}
+            ) : (
+              <div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {documents.map(doc => {
+                    const fileInfo = getFileTypeInfo(doc.file_type.toLowerCase());
+                    const isRecent = isRecentlyUploaded(doc);
+                    
+                    return (
+                      <div 
+                        key={doc.id}
+                        onClick={() => handleDocumentSelect(doc.id)}
+                        className={`
+                          border rounded-lg p-4 cursor-pointer transition-all relative
+                          ${quizData.document_ids.includes(doc.id) 
+                            ? 'border-primary-300 bg-primary-50 shadow-md' 
+                            : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'}
+                        `}
+                      >
+                        {isRecent && (
+                          <span className="absolute top-0 right-0 -mt-2 -mr-2 bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
+                            New
+                          </span>
+                        )}
+                        
+                        <div className="flex items-start">
+                          <div className={`flex-shrink-0 p-2 ${fileInfo.bgColor} ${fileInfo.textColor} rounded-lg`}>
+                            <DocumentTextIcon className="h-5 w-5" />
+                          </div>
+                          <div className="ml-3 flex-1">
+                            <div className="text-sm font-medium text-gray-900 truncate">
+                              {doc.filename}
+                            </div>
+                            <div className="text-xs text-gray-500 mt-1">
+                              {doc.file_type.toUpperCase()} · {formatDate(doc.created_at)}
+                            </div>
+                          </div>
+                          {quizData.document_ids.includes(doc.id) && (
+                            <CheckIcon className="h-5 w-5 text-primary-600" />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                
+                {quizData.document_ids.length > 0 && (
+                  <div className="mt-6 bg-blue-50 border border-blue-100 rounded-lg p-4">
+                    <h4 className="font-medium text-blue-800 flex items-center">
+                      <LightBulbIcon className="h-5 w-5 mr-2" />
+                      Selected Documents ({quizData.document_ids.length})
+                    </h4>
+                    <ul className="mt-2 space-y-1">
+                      {quizData.document_ids.map(id => {
+                        const doc = documents.find(d => d.id === id);
+                        return doc ? (
+                          <li key={id} className="text-sm text-blue-700 flex justify-between">
+                            <span>{doc.filename}</span>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDocumentSelect(id);
+                              }}
+                              className="text-blue-600 hover:text-blue-800"
+                            >
+                              Remove
+                            </button>
+                          </li>
+                        ) : null;
+                      })}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {quizData.document_ids.length === 0 && documents.length > 0 && (
+              <div className="mt-4 p-3 bg-yellow-50 border border-yellow-100 rounded-md flex items-center">
+                <ExclamationCircleIcon className="h-5 w-5 text-yellow-600 mr-2" />
+                <p className="text-sm text-yellow-800">
+                  Please select at least one document for better quiz generation.
+                </p>
+              </div>
+            )}
           </div>
         )}
+      </div>
+
+      {/* Skip Documents Option */}
+      <div className="bg-white rounded-lg shadow-md p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-medium text-gray-900">No Documents?</h3>
+            <p className="text-sm text-gray-600 mt-1">
+              You can also create a quiz without documents by specifying a topic directly.
+            </p>
+          </div>
+          <Button
+            onClick={() => nextStep()}
+            variant="outline"
+          >
+            Skip Document Selection
+          </Button>
+        </div>
       </div>
       
       <div className="flex justify-between pt-4">
@@ -284,7 +525,7 @@ const QuizBuilder = () => {
     <div className="space-y-6">
       <h2 className="text-xl font-semibold text-gray-800">Quiz Details</h2>
       
-      <div className="bg-white rounded-lg shadow p-6 space-y-4">
+      <div className="bg-white rounded-lg shadow-md p-6 space-y-6">
         <div>
           <label htmlFor="title" className="block text-sm font-medium text-gray-700 mb-1">
             Quiz Title
@@ -296,8 +537,11 @@ const QuizBuilder = () => {
             value={quizData.title}
             onChange={handleInputChange}
             placeholder="Enter a title for your quiz"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
           />
+          <p className="mt-1 text-xs text-gray-500">
+            Leave blank to auto-generate a title based on the topic
+          </p>
         </div>
         
         <div>
@@ -312,7 +556,7 @@ const QuizBuilder = () => {
               value={quizData.topic}
               onChange={handleInputChange}
               placeholder="What is this quiz about?"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
               required
             />
             {isAnalyzing && (
@@ -322,7 +566,8 @@ const QuizBuilder = () => {
             )}
           </div>
           {suggestedTopic && quizData.topic === suggestedTopic && (
-            <p className="mt-1 text-xs text-gray-500">
+            <p className="mt-1 text-xs text-gray-500 flex items-center">
+              <LightBulbIcon className="h-3 w-3 mr-1" />
               Topic suggested from document content
             </p>
           )}
@@ -332,17 +577,45 @@ const QuizBuilder = () => {
           <label htmlFor="num_questions" className="block text-sm font-medium text-gray-700 mb-1">
             Number of Questions <span className="text-red-500">*</span>
           </label>
-          <input
-            type="number"
-            id="num_questions"
-            name="num_questions"
-            value={quizData.num_questions}
-            onChange={handleNumberChange}
-            min="1"
-            max="20"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            required
-          />
+          <div className="flex items-center">
+            <button
+              type="button"
+              onClick={() => setQuizData(prev => ({ 
+                ...prev, 
+                num_questions: Math.max(1, prev.num_questions - 1) 
+              }))}
+              className="p-2 border border-gray-300 rounded-l-md bg-gray-50 hover:bg-gray-100"
+            >
+              <span className="sr-only">Decrease</span>
+              <svg className="h-4 w-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+              </svg>
+            </button>
+            <input
+              type="number"
+              id="num_questions"
+              name="num_questions"
+              value={quizData.num_questions}
+              onChange={handleNumberChange}
+              min="1"
+              max="20"
+              className="w-16 text-center py-2 border-t border-b border-gray-300 focus:ring-0 focus:outline-none"
+              required
+            />
+            <button
+              type="button"
+              onClick={() => setQuizData(prev => ({ 
+                ...prev, 
+                num_questions: Math.min(20, prev.num_questions + 1) 
+              }))}
+              className="p-2 border border-gray-300 rounded-r-md bg-gray-50 hover:bg-gray-100"
+            >
+              <span className="sr-only">Increase</span>
+              <svg className="h-4 w-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+            </button>
+          </div>
           <p className="mt-1 text-xs text-gray-500">
             Choose between 1-20 questions (10 recommended)
           </p>
@@ -356,7 +629,7 @@ const QuizBuilder = () => {
               name="use_default_prompt"
               checked={quizData.use_default_prompt}
               onChange={handleInputChange}
-              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
             />
             <label htmlFor="use_default_prompt" className="ml-2 block text-sm text-gray-700">
               Use default system prompt
@@ -375,7 +648,7 @@ const QuizBuilder = () => {
                 onChange={handleInputChange}
                 rows="4"
                 placeholder="Enter your custom system prompt for quiz generation"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
                 required={!quizData.use_default_prompt}
               />
               <p className="mt-1 text-xs text-gray-500">
@@ -393,10 +666,10 @@ const QuizBuilder = () => {
               name="use_embeddings"
               checked={quizData.use_embeddings}
               onChange={handleInputChange}
-              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
             />
             <label htmlFor="use_embeddings" className="ml-2 block text-sm text-gray-700">
-              Use semantic search (better results but slower)
+              Use semantic search for document analysis (better results but slower)
             </label>
           </div>
           <p className="ml-6 mt-1 text-xs text-gray-500">
@@ -455,7 +728,7 @@ const QuizBuilder = () => {
             </>
           ) : (
             <>
-              <PlusCircleIcon className="h-4 w-4 mr-2" />
+              <PaperAirplaneIcon className="h-4 w-4 mr-2" />
               Generate Quiz
             </>
           )}
@@ -476,7 +749,7 @@ const QuizBuilder = () => {
               <div 
                 className={`
                   w-full h-2 rounded-full 
-                  ${currentStep >= step ? 'bg-blue-600' : 'bg-gray-200'}
+                  ${currentStep >= step ? 'bg-primary-600' : 'bg-gray-200'}
                   ${step === 1 ? 'rounded-r-none' : ''}
                   ${step === 2 ? 'rounded-l-none' : ''}
                 `}
@@ -485,8 +758,8 @@ const QuizBuilder = () => {
           ))}
         </div>
         <div className="flex justify-between text-xs font-medium text-gray-500">
-          <span className={currentStep >= 1 ? 'text-blue-600' : ''}>Document Selection</span>
-          <span className={currentStep >= 2 ? 'text-blue-600' : ''}>Quiz Details</span>
+          <span className={currentStep >= 1 ? 'text-primary-600' : ''}>Document Selection</span>
+          <span className={currentStep >= 2 ? 'text-primary-600' : ''}>Quiz Details</span>
         </div>
       </div>
       

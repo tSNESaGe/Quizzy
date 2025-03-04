@@ -1,309 +1,278 @@
-// frontend/src/components/common/FileUpload.jsx
 import React, { useState, useRef } from 'react';
-import { toast } from 'react-hot-toast';
 import { 
-  DocumentArrowUpIcon, 
+  CloudArrowUpIcon, 
   XMarkIcon, 
   DocumentTextIcon,
+  DocumentCheckIcon,
   ArrowPathIcon
 } from '@heroicons/react/24/outline';
-import { uploadDocument } from '../../services/api';
+import { batchUploadDocuments, uploadDocument } from '../../services/api';
+import { toast } from 'react-hot-toast';
+import Button from './Button';
+import crypto from 'crypto';
 
 const FileUpload = ({ onUploadSuccess }) => {
-  const [isDragging, setIsDragging] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState({});
   const [files, setFiles] = useState([]);
+  const [processingFiles, setProcessingFiles] = useState([]);
+  const [overallProgress, setOverallProgress] = useState(0);
   const fileInputRef = useRef(null);
 
-  const supportedTypes = [
-    'application/pdf',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'text/html',
-    'text/plain',
-    'application/json',
-  ];
-
-  const fileExtensions = {
-    'application/pdf': 'PDF',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'DOCX',
-    'text/html': 'HTML',
-    'text/plain': 'TXT',
-    'application/json': 'JSON',
+  // Function to calculate file hash
+  const calculateFileHash = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const buffer = event.target.result;
+        const hash = crypto.createHash('sha256');
+        hash.update(buffer);
+        resolve(hash.digest('hex'));
+      };
+      reader.onerror = (error) => reject(error);
+      reader.readAsArrayBuffer(file);
+    });
   };
 
-  const handleDragEnter = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const validateFile = (file) => {
-    if (!supportedTypes.includes(file.type)) {
-      toast.error(`Unsupported file type: ${file.type}. Please upload PDF, DOCX, HTML, TXT, or JSON.`);
-      return false;
-    }
-    if (file.size > 16 * 1024 * 1024) {
-      toast.error('File size exceeds the 16MB limit.');
-      return false;
-    }
-    return true;
-  };
-
-  const processFiles = (newFiles) => {
-    const validFiles = Array.from(newFiles).filter(validateFile);
-    if (validFiles.length > 0) {
-      setFiles(prev => [...prev, ...validFiles]);
-    }
-  };
-
-  const handleFileDrop = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-    processFiles(e.dataTransfer.files);
-  };
-
-  const handleFileSelect = (e) => {
-    processFiles(e.target.files);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
-
-  const removeFile = (index) => {
-    const newFiles = [...files];
-    newFiles.splice(index, 1);
-    setFiles(newFiles);
+  // Handle file selection
+  const handleFileSelect = async (event) => {
+    const selectedFiles = Array.from(event.target.files);
     
-    // Also remove from progress tracking
-    const newProgress = { ...uploadProgress };
-    delete newProgress[index];
-    setUploadProgress(newProgress);
+    // Calculate hashes for new files and check for duplicates
+    const filesWithHashes = await Promise.all(
+      selectedFiles.map(async (file) => ({
+        file,
+        hash: await calculateFileHash(file)
+      }))
+    );
+
+    // Check for duplicates within the current selection
+    const uniqueFiles = [];
+    const duplicateFiles = [];
+    
+    filesWithHashes.forEach(({ file, hash }) => {
+      const isDuplicateInCurrentSelection = uniqueFiles.some(
+        existingFile => existingFile.hash === hash
+      );
+      
+      if (!isDuplicateInCurrentSelection) {
+        uniqueFiles.push({ file, hash });
+      } else {
+        duplicateFiles.push(file);
+      }
+    });
+
+    // Show warning for duplicates in current selection
+    if (duplicateFiles.length > 0) {
+      toast.error(`${duplicateFiles.length} file(s) are duplicates within this upload`);
+    }
+
+    // Update files state with unique files
+    setFiles(prev => [...prev, ...uniqueFiles]);
   };
 
-  const uploadFiles = async () => {
+  // Remove a file from selection
+  const removeFile = (fileToRemove) => {
+    setFiles(prev => prev.filter(({ file }) => file !== fileToRemove));
+  };
+
+  // Upload files
+  const handleUpload = async () => {
     if (files.length === 0) {
-      toast.error('Please select files to upload.');
+      toast.error('Please select files to upload');
       return;
     }
-    
-    setUploading(true);
-    let uploadedDocuments = [];
-    
+
     try {
-      // Upload files one by one to better track progress
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        
-        // Skip already uploaded files
-        if (uploadProgress[i] === 100) continue;
-        
-        try {
-          // Set initial progress
-          setUploadProgress(prev => ({
-            ...prev,
-            [i]: 0
-          }));
-          
-          // Simulate progress during upload (real progress would require backend support)
-          const progressInterval = setInterval(() => {
-            setUploadProgress(prev => {
-              const currentProgress = prev[i] || 0;
-              if (currentProgress < 90) {  // Go up to 90%, the last 10% when complete
-                return {
-                  ...prev,
-                  [i]: currentProgress + Math.floor(Math.random() * 10) + 1
-                };
+      // Reset processing states
+      setProcessingFiles(files.map(({ file }) => ({ 
+        file, 
+        status: 'processing',
+        hash: file.hash 
+      })));
+      setOverallProgress(0);
+
+      // Batch upload files
+      const filesToUpload = files.map(({ file }) => file);
+      const uploadResponse = await batchUploadDocuments(
+        filesToUpload, 
+        true,  // create embeddings
+        true   // skip duplicates
+      );
+
+      // Process upload response
+      const processedFiles = uploadResponse.map(result => ({
+        file: filesToUpload.find(f => f.name === result.filename),
+        status: result.status,
+        existingDocumentId: result.existing_document_id || null
+      }));
+
+      // Update processing files state
+      setProcessingFiles(processedFiles);
+
+      // Calculate overall progress
+      const successCount = processedFiles.filter(f => f.status === 'uploaded').length;
+      setOverallProgress((successCount / processedFiles.length) * 100);
+
+      // Show toast notifications
+      processedFiles.forEach(result => {
+        if (result.status === 'uploaded') {
+          toast.success(`${result.file.name} uploaded successfully`);
+        } else if (result.status === 'duplicate') {
+          toast.info(`${result.file.name} is a duplicate`, {
+            duration: 5000,
+            action: {
+              text: 'View Existing',
+              onClick: () => {
+                // Implement navigation to existing document
+                // You might want to pass the existing_document_id to a function
+                console.log('Existing document ID:', result.existingDocumentId);
               }
-              return prev;
-            });
-          }, 300);
-          
-          // Upload the file
-          const response = await uploadDocument(file);
-          clearInterval(progressInterval);
-          
-          // Set complete progress
-          setUploadProgress(prev => ({
-            ...prev,
-            [i]: 100
-          }));
-          
-          // Add to successfully uploaded documents
-          uploadedDocuments.push(response);
-        } catch (error) {
-          console.error(`Error uploading ${file.name}:`, error);
-          toast.error(`Failed to upload ${file.name}`);
-          
-          // Mark as failed in progress
-          setUploadProgress(prev => ({
-            ...prev,
-            [i]: -1  // -1 indicates failure
-          }));
+            }
+          });
         }
-      }
-      
-      // If we have successful uploads, notify parent component
-      if (uploadedDocuments.length > 0) {
-        toast.success(`Successfully uploaded ${uploadedDocuments.length} file(s).`);
-        
-        // Call the callback passed from parent
-        if (onUploadSuccess) {
-          onUploadSuccess(uploadedDocuments);
-        }
-        
-        // Remove successfully uploaded files from the list
-        const remainingFiles = files.filter((_, index) => uploadProgress[index] !== 100);
-        setFiles(remainingFiles);
-        
-        // Reset progress for remaining files
-        const newProgress = {};
-        remainingFiles.forEach((_, index) => {
-          newProgress[index] = uploadProgress[files.findIndex((f, i) => files[i] === remainingFiles[index])];
-        });
-        setUploadProgress(newProgress);
-      }
+      });
+
+      // Clear files and call success callback
+      setFiles([]);
+      fileInputRef.current.value = '';
+      onUploadSuccess(processedFiles);
+
     } catch (error) {
-      toast.error('An error occurred while uploading files.');
       console.error('Upload error:', error);
-    } finally {
-      setUploading(false);
+      toast.error('Error uploading files');
+      setProcessingFiles([]);
+      setOverallProgress(0);
     }
   };
 
-  const getProgressColor = (progress) => {
-    if (progress === -1) return 'bg-red-500';  // Error
-    if (progress === 100) return 'bg-green-500';  // Complete
-    return 'bg-blue-500';  // In progress
+  // Render file size in human-readable format
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
   return (
-    <div className="space-y-3">
-      <div
-        onDragEnter={handleDragEnter}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleFileDrop}
-        onClick={() => fileInputRef.current?.click()}
-        className={`
-          border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors
-          ${isDragging
-            ? 'border-blue-500 bg-blue-50'
-            : 'border-gray-300 hover:border-blue-400 hover:bg-gray-50'
-          }
-        `}
+    <div className="w-full">
+      {/* File Input */}
+      <div 
+        className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center 
+        hover:border-primary-500 transition duration-300"
       >
-        <DocumentArrowUpIcon className="mx-auto h-12 w-12 text-gray-400" />
-        <p className="mt-2 text-sm text-gray-600">
-          <span className="font-medium text-blue-600 hover:text-blue-500">
-            Click to upload
-          </span>{' '}
-          or drag and drop
-        </p>
-        <p className="mt-1 text-xs text-gray-500">
-          PDF, DOCX, HTML, TXT, JSON (max 16MB)
-        </p>
-        <input
+        <input 
+          type="file" 
+          multiple 
           ref={fileInputRef}
-          type="file"
-          className="hidden"
-          multiple
           onChange={handleFileSelect}
-          accept=".pdf,.docx,.html,.txt,.json,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/html,text/plain,application/json"
+          className="hidden"
+          id="file-upload"
         />
+        <label 
+          htmlFor="file-upload" 
+          className="cursor-pointer flex flex-col items-center"
+        >
+          <CloudArrowUpIcon className="h-12 w-12 text-gray-400 mb-4" />
+          <p className="text-gray-600 mb-2">
+            Drag and drop files or <span className="text-primary-600">browse</span>
+          </p>
+          <p className="text-xs text-gray-500">
+            Supports PDF, DOCX, TXT, HTML, JSON (Max 50MB per file)
+          </p>
+        </label>
       </div>
-      
+
+      {/* Selected Files List */}
       {files.length > 0 && (
-        <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <h4 className="text-sm font-medium text-gray-700 mb-3">Selected files</h4>
-          <ul className="space-y-3 max-h-48 overflow-y-auto">
-            {files.map((file, index) => (
-              <li key={`${file.name}-${index}`} className="relative bg-gray-50 rounded-md">
-                <div className="flex items-center justify-between px-3 py-2 text-sm">
-                  <div className="flex items-center max-w-xs">
-                    <DocumentTextIcon className="h-5 w-5 text-gray-400 mr-2" />
-                    <span className="text-gray-800 font-medium truncate">
-                      {file.name}
-                    </span>
-                    <span className="ml-2 text-xs text-gray-500 flex-shrink-0">
-                      ({fileExtensions[file.type] || 'Unknown'})
-                    </span>
-                  </div>
-                  
-                  <div className="flex items-center">
-                    {uploadProgress[index] !== undefined && (
-                      <div className="mr-3 text-xs font-medium">
-                        {uploadProgress[index] === -1 ? (
-                          <span className="text-red-500">Failed</span>
-                        ) : uploadProgress[index] === 100 ? (
-                          <span className="text-green-500">Completed</span>
-                        ) : (
-                          <span>{uploadProgress[index]}%</span>
-                        )}
-                      </div>
-                    )}
-                    
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeFile(index);
-                      }}
-                      className="text-gray-400 hover:text-gray-600"
-                    >
-                      <XMarkIcon className="h-5 w-5" />
-                    </button>
+        <div className="mt-4">
+          <h4 className="text-sm font-medium text-gray-700 mb-2">
+            Selected Files ({files.length})
+          </h4>
+          <ul className="space-y-2">
+            {files.map(({ file, hash }) => (
+              <li 
+                key={hash} 
+                className="flex items-center justify-between bg-gray-50 p-3 rounded-lg"
+              >
+                <div className="flex items-center space-x-3">
+                  <DocumentTextIcon className="h-6 w-6 text-gray-500" />
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">{file.name}</p>
+                    <p className="text-xs text-gray-500">
+                      {formatFileSize(file.size)} • {file.type || 'Unknown type'}
+                    </p>
                   </div>
                 </div>
-                
-                {/* Progress bar */}
-                {uploadProgress[index] !== undefined && (
-                  <div className="h-1 w-full bg-gray-200 absolute bottom-0 left-0 rounded-b-md overflow-hidden">
-                    <div 
-                      className={`h-full ${getProgressColor(uploadProgress[index])}`}
-                      style={{ width: `${uploadProgress[index] === -1 ? 100 : uploadProgress[index]}%` }}
-                    />
-                  </div>
-                )}
+                <button 
+                  onClick={() => removeFile(file)}
+                  className="text-red-500 hover:text-red-700"
+                >
+                  <XMarkIcon className="h-5 w-5" />
+                </button>
               </li>
             ))}
           </ul>
-          
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              uploadFiles();
-            }}
-            disabled={uploading || files.length === 0}
-            className={`
-              mt-3 px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm 
-              text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 
-              focus:ring-offset-2 focus:ring-blue-500 w-full flex items-center justify-center
-              ${(uploading || files.length === 0) && 'opacity-75 cursor-not-allowed'}
-            `}
+        </div>
+      )}
+
+      {/* Processing Files Indicator */}
+      {processingFiles.length > 0 && (
+        <div className="mt-4">
+          <h4 className="text-sm font-medium text-gray-700 mb-2">
+            Processing Files
+          </h4>
+          <ul className="space-y-2">
+            {processingFiles.map(({ file, status }) => (
+              <li 
+                key={file.name} 
+                className="flex items-center justify-between bg-gray-50 p-3 rounded-lg"
+              >
+                <div className="flex items-center space-x-3">
+                  {status === 'processing' ? (
+                    <ArrowPathIcon className="h-6 w-6 text-blue-500 animate-spin" />
+                  ) : status === 'uploaded' ? (
+                    <DocumentCheckIcon className="h-6 w-6 text-green-500" />
+                  ) : (
+                    <DocumentTextIcon className="h-6 w-6 text-gray-500" />
+                  )}
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">{file.name}</p>
+                    <p className="text-xs text-gray-500 capitalize">
+                      {status}
+                    </p>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Overall Progress */}
+      {overallProgress > 0 && (
+        <div className="mt-4">
+          <div className="flex justify-between text-sm text-gray-600 mb-1">
+            <span>Upload Progress</span>
+            <span>{Math.round(overallProgress)}%</span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-2.5">
+            <div 
+              className="bg-primary-600 h-2.5 rounded-full" 
+              style={{ width: `${overallProgress}%` }}
+            ></div>
+          </div>
+        </div>
+      )}
+
+      {/* Upload Button */}
+      {files.length > 0 && (
+        <div className="mt-4 flex justify-end">
+          <Button 
+            onClick={handleUpload}
+            className="w-full"
           >
-            {uploading ? (
-              <>
-                <ArrowPathIcon className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" />
-                Uploading...
-              </>
-            ) : (
-              `Upload ${files.length} file${files.length !== 1 ? 's' : ''}`
-            )}
-          </button>
+            Upload {files.length} File{files.length !== 1 ? 's' : ''}
+          </Button>
         </div>
       )}
     </div>

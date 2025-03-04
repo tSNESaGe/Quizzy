@@ -181,6 +181,50 @@ const useAppStore = create(
           }
         },
         
+        updateQuizQuestionPositions: async (quizId, positionsPayload) => {
+          // Store current quiz state for potential rollback
+          const currentQuizBackup = get().currentQuiz; 
+          
+          try {
+            // The UI should already be updated at this point since we're using optimistic updates
+            // Make the API call without waiting for it
+            const response = await api.updateQuestionPositions(quizId, positionsPayload);
+            
+            // After successful API call, sync with server response if needed
+            if (response) {
+              // If the server returned updated quiz data, use it to ensure consistency
+              set(state => ({
+                quizzes: state.quizzes.map(q => 
+                  q.id === quizId && response.questions ? 
+                    { ...q, questions: response.questions } : q
+                ),
+              }));
+            }
+            
+            return true;
+          } catch (error) {
+            // If the API call fails, revert to the backup
+            console.error('Error updating question positions:', error);
+            
+            set(state => ({
+              currentQuiz: state.currentQuiz?.id === quizId ? currentQuizBackup : state.currentQuiz,
+              error: error.response?.data?.detail || 'Failed to update question positions',
+            }));
+            
+            // Try to refresh quiz data from server
+            try {
+              const refreshedQuiz = await api.getQuizById(quizId);
+              set(state => ({
+                currentQuiz: state.currentQuiz?.id === quizId ? refreshedQuiz : state.currentQuiz,
+              }));
+            } catch (refreshError) {
+              console.error('Failed to refresh quiz after reordering error:', refreshError);
+            }
+            
+            return false;
+          }
+        },
+
         createDocumentEmbeddings: async (id) => {
           set({ isLoading: true, error: null });
           try {
@@ -345,47 +389,55 @@ const useAppStore = create(
         },
         
         addQuestion: async (quizId, questionData) => {
-          set({ isLoading: true, error: null });
+          // Create a temporary ID for optimistic update
+          const tempId = `temp-${Date.now()}`;
+          
+          // Create a complete question object for optimistic update
+          const optimisticQuestion = {
+            id: tempId,
+            quiz_id: quizId,
+            question_text: questionData.question_text,
+            question_type: questionData.question_type,
+            explanation: questionData.explanation || '',
+            position: questionData.position || 0,
+            correct_answer: questionData.correct_answer || '',
+            answers: questionData.answers 
+              ? questionData.answers.map((answer, index) => ({
+                  id: `temp-answer-${index}-${Date.now()}`,
+                  answer_text: answer.answer_text,
+                  is_correct: answer.is_correct,
+                  position: answer.position || index
+                }))
+              : [],
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          };
+          
+          // Update UI immediately (optimistic update)
+          set(state => {
+            if (state.currentQuiz?.id === quizId) {
+              return {
+                currentQuiz: {
+                  ...state.currentQuiz,
+                  questions: [...state.currentQuiz.questions, optimisticQuestion]
+                }
+              };
+            }
+            return {};
+          });
+          
+          // Now call the API to persist the change
           try {
-            const question = await api.addQuestion(quizId, questionData);
+            const actualQuestion = await api.addQuestion(quizId, questionData);
             
-            // Update current quiz if it's the one we're adding to
-            set(state => {
-              if (state.currentQuiz?.id === quizId) {
-                return {
-                  currentQuiz: {
-                    ...state.currentQuiz,
-                    questions: [...state.currentQuiz.questions, question]
-                  },
-                  isLoading: false
-                };
-              }
-              return { isLoading: false };
-            });
-            
-            return question;
-          } catch (error) {
-            set({ 
-              error: error.response?.data?.detail || 'Failed to add question', 
-              isLoading: false 
-            });
-            return null;
-          }
-        },
-        
-        updateQuestion: async (quizId, questionId, questionData) => {
-          set({ isLoading: true, error: null });
-          try {
-            const updatedQuestion = await api.updateQuestion(quizId, questionId, questionData);
-            
-            // Update current quiz if it contains the updated question
+            // Replace the temporary question with the actual one from the server
             set(state => {
               if (state.currentQuiz?.id === quizId) {
                 return {
                   currentQuiz: {
                     ...state.currentQuiz,
                     questions: state.currentQuiz.questions.map(q => 
-                      q.id === questionId ? updatedQuestion : q
+                      q.id === tempId ? actualQuestion : q
                     )
                   },
                   isLoading: false
@@ -394,28 +446,108 @@ const useAppStore = create(
               return { isLoading: false };
             });
             
-            return updatedQuestion;
+            return actualQuestion;
           } catch (error) {
-            set({ 
-              error: error.response?.data?.detail || 'Failed to update question', 
-              isLoading: false 
-            });
-            return null;
-          }
-        },
-        
-        deleteQuestion: async (quizId, questionId) => {
-          set({ isLoading: true, error: null });
-          try {
-            await api.deleteQuestion(quizId, questionId);
-            
-            // Update current quiz if it contains the deleted question
+            // If the server request fails, remove the optimistic question
             set(state => {
               if (state.currentQuiz?.id === quizId) {
                 return {
                   currentQuiz: {
                     ...state.currentQuiz,
-                    questions: state.currentQuiz.questions.filter(q => q.id !== questionId)
+                    questions: state.currentQuiz.questions.filter(q => q.id !== tempId)
+                  },
+                  error: error.response?.data?.detail || 'Failed to add question',
+                  isLoading: false
+                };
+              }
+              return { 
+                error: error.response?.data?.detail || 'Failed to add question',
+                isLoading: false
+              };
+            });
+            
+            throw error; // Re-throw for the component to handle
+          }
+        },        
+        
+        updateQuestion: async (quizId, questionId, questionData) => {
+          // Find the existing question for comparison
+          let originalQuestion = null;
+          set(state => {
+            if (state.currentQuiz?.id === quizId) {
+              originalQuestion = state.currentQuiz.questions.find(q => q.id === questionId);
+            }
+            return {}; // No state change yet
+          });
+          
+          // If we couldn't find the question, return error
+          if (!originalQuestion) {
+            set({ 
+              error: 'Question not found', 
+              isLoading: false 
+            });
+            return null;
+          }
+          
+          // Create updated question for optimistic update
+          const updatedQuestion = {
+            ...originalQuestion,
+            ...questionData,
+            // Special handling for answers if provided
+            answers: questionData.answers 
+              ? questionData.answers.map(a => ({
+                  id: a.id || `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                  question_id: questionId,
+                  answer_text: a.answer_text,
+                  is_correct: a.is_correct,
+                  position: a.position
+                }))
+              : originalQuestion.answers,
+            updated_at: new Date().toISOString()
+          };
+          
+          // Update UI immediately (optimistic update)
+          set(state => {
+            if (state.currentQuiz?.id === quizId) {
+              return {
+                currentQuiz: {
+                  ...state.currentQuiz,
+                  questions: state.currentQuiz.questions.map(q => 
+                    q.id === questionId ? updatedQuestion : q
+                  )
+                }
+              };
+            }
+            return {};
+          });
+          
+          // Now call the API to persist the change
+          try {
+            // Prepare data for API
+            const apiData = {
+              question_text: questionData.question_text,
+              question_type: questionData.question_type,
+              explanation: questionData.explanation,
+              correct_answer: questionData.correct_answer,
+              answers: questionData.answers
+            };
+            
+            // Only include fields that were actually provided
+            Object.keys(apiData).forEach(key => 
+              apiData[key] === undefined && delete apiData[key]
+            );
+            
+            const serverQuestion = await api.updateQuestion(quizId, questionId, apiData);
+            
+            // Update state with the server response
+            set(state => {
+              if (state.currentQuiz?.id === quizId) {
+                return {
+                  currentQuiz: {
+                    ...state.currentQuiz,
+                    questions: state.currentQuiz.questions.map(q => 
+                      q.id === questionId ? serverQuestion : q
+                    )
                   },
                   isLoading: false
                 };
@@ -423,22 +555,104 @@ const useAppStore = create(
               return { isLoading: false };
             });
             
-            return true;
+            return serverQuestion;
           } catch (error) {
-            set({ 
-              error: error.response?.data?.detail || 'Failed to delete question', 
-              isLoading: false 
+            // Revert optimistic update if server request fails
+            set(state => {
+              if (state.currentQuiz?.id === quizId) {
+                return {
+                  currentQuiz: {
+                    ...state.currentQuiz,
+                    questions: state.currentQuiz.questions.map(q => 
+                      q.id === questionId ? originalQuestion : q
+                    )
+                  },
+                  error: error.response?.data?.detail || 'Failed to update question',
+                  isLoading: false
+                };
+              }
+              return { 
+                error: error.response?.data?.detail || 'Failed to update question',
+                isLoading: false 
+              };
             });
-            return false;
+            
+            throw error; // Re-throw for the component to handle
           }
         },
         
+        deleteQuestion: async (quizId, questionId) => {
+          // Find the question to delete
+          let questionToDelete = null;
+          set(state => {
+            if (state.currentQuiz?.id === quizId) {
+              questionToDelete = state.currentQuiz.questions.find(q => q.id === questionId);
+            }
+            return {}; // No state change yet
+          });
+          
+          // Remove from UI immediately (optimistic update)
+          set(state => {
+            if (state.currentQuiz?.id === quizId) {
+              return {
+                currentQuiz: {
+                  ...state.currentQuiz,
+                  questions: state.currentQuiz.questions.filter(q => q.id !== questionId)
+                }
+              };
+            }
+            return {};
+          });
+          
+          // Now call API to delete on server
+          try {
+            await api.deleteQuestion(quizId, questionId);
+            set({ isLoading: false });
+            return true;
+          } catch (error) {
+            // Restore the deleted question if server request fails
+            set(state => {
+              if (state.currentQuiz?.id === quizId && questionToDelete) {
+                return {
+                  currentQuiz: {
+                    ...state.currentQuiz,
+                    questions: [...state.currentQuiz.questions, questionToDelete].sort((a, b) => a.position - b.position)
+                  },
+                  error: error.response?.data?.detail || 'Failed to delete question',
+                  isLoading: false
+                };
+              }
+              return { 
+                error: error.response?.data?.detail || 'Failed to delete question',
+                isLoading: false 
+              };
+            });
+            
+            throw error; // Re-throw for the component to handle
+          }
+        },        
+        
         regenerateQuestion: async (quizId, questionId, useDocumentContent = true) => {
-          set({ isLoading: true, error: null });
+          // Find the original question
+          let originalQuestion = null;
+          set(state => {
+            if (state.currentQuiz?.id === quizId) {
+              originalQuestion = state.currentQuiz.questions.find(q => q.id === questionId);
+            }
+            return {}; // No state change yet
+          });
+          
+          if (!originalQuestion) {
+            set({ error: 'Question not found', isLoading: false });
+            return null;
+          }
+          
+          set({ isGenerating: true });
+          
           try {
             const regeneratedQuestion = await api.regenerateQuestion(quizId, questionId, useDocumentContent);
             
-            // Update current quiz if it contains the regenerated question
+            // Update the question in state
             set(state => {
               if (state.currentQuiz?.id === quizId) {
                 return {
@@ -448,21 +662,22 @@ const useAppStore = create(
                       q.id === questionId ? regeneratedQuestion : q
                     )
                   },
-                  isLoading: false
+                  isGenerating: false
                 };
               }
-              return { isLoading: false };
+              return { isGenerating: false };
             });
             
             return regeneratedQuestion;
           } catch (error) {
             set({ 
               error: error.response?.data?.detail || 'Failed to regenerate question', 
-              isLoading: false 
+              isGenerating: false 
             });
-            return null;
+            
+            throw error; // Re-throw for the component to handle
           }
-        },
+        },        
         
         changeQuestionType: async (quizId, questionId, newType, useDocumentContent = true) => {
           set({ isLoading: true, error: null });
@@ -495,6 +710,142 @@ const useAppStore = create(
           }
         },
         
+        convertQuestionType: async (quizId, questionId, newType) => {
+          // Find the original question
+          let originalQuestion = null;
+          set(state => {
+            if (state.currentQuiz?.id === quizId) {
+              originalQuestion = state.currentQuiz.questions.find(q => q.id === questionId);
+            }
+            return {}; // No state change yet
+          });
+          
+          if (!originalQuestion) {
+            set({ error: 'Question not found', isLoading: false });
+            return null;
+          }
+          
+          // Create optimistic update
+          let updatedAnswers = [];
+          
+          if (newType === 'boolean') {
+            updatedAnswers = [
+              { answer_text: 'True', is_correct: true, position: 0 },
+              { answer_text: 'False', is_correct: false, position: 1 }
+            ];
+          } else if (newType === 'multiple_choice') {
+            // If coming from boolean, create 4 options with first one correct
+            if (originalQuestion.question_type === 'boolean') {
+              updatedAnswers = [
+                { answer_text: 'Option A', is_correct: true, position: 0 },
+                { answer_text: 'Option B', is_correct: false, position: 1 },
+                { answer_text: 'Option C', is_correct: false, position: 2 },
+                { answer_text: 'Option D', is_correct: false, position: 3 }
+              ];
+            } else {
+              // Keep existing answers or create default ones
+              updatedAnswers = originalQuestion.answers.length > 0 
+                ? originalQuestion.answers
+                : [
+                    { answer_text: 'Option A', is_correct: true, position: 0 },
+                    { answer_text: 'Option B', is_correct: false, position: 1 },
+                    { answer_text: 'Option C', is_correct: false, position: 2 },
+                    { answer_text: 'Option D', is_correct: false, position: 3 }
+                  ];
+            }
+          } else if (newType === 'open_ended') {
+            // For open-ended, no answers needed
+            updatedAnswers = [];
+          }
+          
+          // Create updated question with new type and answers
+          const updatedQuestion = {
+            ...originalQuestion,
+            question_type: newType,
+            answers: updatedAnswers,
+            // For open-ended, use explanation as correct_answer if not already set
+            correct_answer: newType === 'open_ended' 
+              ? originalQuestion.correct_answer || originalQuestion.explanation
+              : undefined
+          };
+          
+          // Update UI immediately (optimistic update)
+          set(state => {
+            if (state.currentQuiz?.id === quizId) {
+              return {
+                currentQuiz: {
+                  ...state.currentQuiz,
+                  questions: state.currentQuiz.questions.map(q => 
+                    q.id === questionId ? updatedQuestion : q
+                  )
+                }
+              };
+            }
+            return {};
+          });
+          
+          // Call API to change type on server
+          try {
+            const serverQuestion = await api.convertQuestionType(quizId, questionId, newType);
+            
+            // Update with server response
+            set(state => {
+              if (state.currentQuiz?.id === quizId) {
+                return {
+                  currentQuiz: {
+                    ...state.currentQuiz,
+                    questions: state.currentQuiz.questions.map(q => 
+                      q.id === questionId ? serverQuestion : q
+                    )
+                  },
+                  isLoading: false
+                };
+              }
+              return { isLoading: false };
+            });
+            
+            return serverQuestion;
+          } catch (error) {
+            // Revert to original if API call fails
+            set(state => {
+              if (state.currentQuiz?.id === quizId) {
+                return {
+                  currentQuiz: {
+                    ...state.currentQuiz,
+                    questions: state.currentQuiz.questions.map(q => 
+                      q.id === questionId ? originalQuestion : q
+                    )
+                  },
+                  error: error.response?.data?.detail || 'Failed to change question type',
+                  isLoading: false
+                };
+              }
+              return {
+                error: error.response?.data?.detail || 'Failed to change question type',
+                isLoading: false
+              };
+            });
+            
+            throw error; // Re-throw for the component to handle
+          }
+        },
+        getQuestionHistory: async (quizId, questionId, limit = 20) => {
+          set({ isLoading: true });
+          
+          try {
+            const history = await api.getQuestionHistory(quizId, questionId, limit);
+            set({ isLoading: false });
+            return history;
+          } catch (error) {
+            set({
+              error: error.response?.data?.detail || 'Failed to get question history',
+              isLoading: false
+            });
+            
+            throw error; // Re-throw for the component to handle
+          }
+        },
+
         getQuizHistory: async (quizId, limit = 50) => {
           set({ isLoading: true, error: null });
           try {
@@ -530,6 +881,53 @@ const useAppStore = create(
             return null;
           }
         },
+
+        revertQuestion: async (quizId, questionId, historyId = null) => {
+          // Find the original question
+          let originalQuestion = null;
+          set(state => {
+            if (state.currentQuiz?.id === quizId) {
+              originalQuestion = state.currentQuiz.questions.find(q => q.id === questionId);
+            }
+            return {}; // No state change yet
+          });
+          
+          if (!originalQuestion) {
+            set({ error: 'Question not found', isLoading: false });
+            return null;
+          }
+          
+          set({ isLoading: true });
+          
+          try {
+            const revertedQuestion = await api.revertQuestion(quizId, questionId, historyId);
+            
+            // Update the question in state
+            set(state => {
+              if (state.currentQuiz?.id === quizId) {
+                return {
+                  currentQuiz: {
+                    ...state.currentQuiz,
+                    questions: state.currentQuiz.questions.map(q => 
+                      q.id === questionId ? revertedQuestion : q
+                    )
+                  },
+                  isLoading: false
+                };
+              }
+              return { isLoading: false };
+            });
+            
+            return revertedQuestion;
+          } catch (error) {
+            set({ 
+              error: error.response?.data?.detail || 'Failed to revert question', 
+              isLoading: false 
+            });
+            
+            throw error; // Re-throw for the component to handle
+          }
+        },        
         
         setQuizzes: (quizzes) => set({ quizzes }),
         

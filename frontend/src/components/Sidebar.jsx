@@ -6,12 +6,14 @@ import {
   DocumentTextIcon, 
   DocumentDuplicateIcon, 
   FolderIcon,
-  Cog6ToothIcon 
+  Cog6ToothIcon,
+  QuestionMarkCircleIcon
 } from '@heroicons/react/24/outline';
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: HomeIcon },
   { name: 'Quizzes', href: '/quizzes', icon: DocumentTextIcon },
+  { name: 'Question Bank', href: '/question-bank', icon: QuestionMarkCircleIcon },
   { name: 'Projects', href: '/projects', icon: FolderIcon },
   { name: 'Documents', href: '/documents', icon: DocumentDuplicateIcon },
   { name: 'Settings', href: '/settings', icon: Cog6ToothIcon },
@@ -48,12 +50,16 @@ const Sidebar = ({ open, setOpen }) => {
                   to={item.href}
                   className={`flex items-center p-2 text-gray-900 rounded-lg dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 group ${
                     location.pathname === item.href 
-                      ? 'bg-gray-100 dark:bg-gray-700'
+                      ? 'bg-gray-100 dark:bg-gray-700 text-primary-600 dark:text-primary-400'
                       : ''
                   }`}
                   onClick={() => setOpen(false)}
                 >
-                  <item.icon className="w-5 h-5 text-gray-500 transition duration-75 dark:text-gray-400 group-hover:text-gray-900 dark:group-hover:text-white" />
+                  <item.icon className={`w-5 h-5 transition duration-75 dark:text-gray-400 group-hover:text-gray-900 dark:group-hover:text-white ${
+                    location.pathname === item.href
+                      ? 'text-primary-600 dark:text-primary-400'
+                      : 'text-gray-500'
+                  }`} />
                   <span className="ml-3">{item.name}</span>
                 </Link>
               </li>

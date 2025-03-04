@@ -73,6 +73,49 @@ def run_migrations():
         if fixed_count > 0:
             print(f"Fixed {fixed_count} question_type values, committing changes...")
             db.commit()
+        
+        # 5) Add file_hash and content_hash columns to documents table
+        print("Checking if file_hash and content_hash columns exist in documents table...")
+        
+        has_file_hash = False
+        has_content_hash = False
+        
+        for column in inspector.get_columns('documents'):
+            if column['name'] == 'file_hash':
+                has_file_hash = True
+            if column['name'] == 'content_hash':
+                has_content_hash = True
+        
+        if not has_file_hash:
+            print("Adding file_hash column to documents table...")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE documents ADD COLUMN file_hash VARCHAR(64)"))
+                conn.execute(text("CREATE INDEX idx_documents_file_hash ON documents(file_hash)"))
+                conn.commit()
+        
+        if not has_content_hash:
+            print("Adding content_hash column to documents table...")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE documents ADD COLUMN content_hash VARCHAR(64)"))
+                conn.execute(text("CREATE INDEX idx_documents_content_hash ON documents(content_hash)"))
+                conn.commit()
+        
+        # Calculate hashes for existing documents
+        if not has_file_hash or not has_content_hash:
+            print("Calculating hashes for existing documents...")
+            from hashlib import sha256
+            from app.models.document import Document
+            documents = db.query(Document).all()
+            
+            for document in documents:
+                if not document.content_hash:
+                    document.content_hash = sha256(document.content.encode('utf-8')).hexdigest()
+                
+                if not document.file_hash:
+                    document.file_hash = document.content_hash
+            
+            db.commit()
+            print(f"Updated hash values for {len(documents)} documents")
 
         print("Database migration completed successfully")
 

@@ -1,175 +1,124 @@
-# backend/app/utils/document_processor.py
-import io
-import json
-import os
-import re
 from typing import Tuple, Dict, Any, Optional, List
-import docx
-from PyPDF2 import PdfReader
-from bs4 import BeautifulSoup
-import tempfile
-import shutil
+import hashlib
+from pathlib import Path
+from docling.document_converter import DocumentConverter
+from docling.chunking import HybridChunker
 
-async def process_document(filename: str, file_content: bytes) -> Tuple[str, str]:
-    """
-    Process an uploaded document and extract its text content
-    Returns a tuple of (file_type, extracted_text)
-    """
-    # Determine file type by extension
-    extension = filename.lower().split('.')[-1]
-    
-    if extension == 'pdf':
-        return process_pdf(file_content)
-    elif extension in ['docx', 'doc']:
-        return process_docx(file_content)
-    elif extension == 'html':
-        return process_html(file_content)
-    elif extension == 'json':
-        return process_json(file_content)
-    elif extension in ['txt', 'text']:
-        return process_text(file_content)
-    else:
-        # Unsupported file type
-        raise ValueError(f"Unsupported file type: {extension}")
-
-def process_pdf(file_content: bytes) -> Tuple[str, str]:
-    """Extract text from PDF file"""
-    pdf_file = io.BytesIO(file_content)
-    reader = PdfReader(pdf_file)
-    
-    text_content = []
-    for page in reader.pages:
-        text_content.append(page.extract_text())
-    
-    return "pdf", "\n\n".join(text_content)
-
-def process_docx(file_content: bytes) -> Tuple[str, str]:
-    """Extract text from DOCX file"""
-    docx_file = io.BytesIO(file_content)
-    doc = docx.Document(docx_file)
-    
-    text_content = []
-    for paragraph in doc.paragraphs:
-        if paragraph.text:
-            text_content.append(paragraph.text)
-    
-    # Also extract text from tables
-    for table in doc.tables:
-        for row in table.rows:
-            row_text = []
-            for cell in row.cells:
-                if cell.text:
-                    row_text.append(cell.text)
-            if row_text:
-                text_content.append(" | ".join(row_text))
-    
-    return "docx", "\n\n".join(text_content)
-
-def process_html(file_content: bytes) -> Tuple[str, str]:
-    """Extract text from HTML file"""
-    try:
-        # Try to decode as UTF-8
-        html_content = file_content.decode('utf-8')
-    except UnicodeDecodeError:
-        # Fall back to latin-1 if UTF-8 fails
-        html_content = file_content.decode('latin-1')
-    
-    soup = BeautifulSoup(html_content, 'html.parser')
-    
-    # Remove script and style elements
-    for script in soup(["script", "style"]):
-        script.extract()
-    
-    # Get text
-    text = soup.get_text(separator='\n')
-    
-    # Break into lines and remove leading/trailing space
-    lines = (line.strip() for line in text.splitlines())
-    # Break multi-headlines into a line each
-    chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-    # Drop blank lines
-    text_content = '\n'.join(chunk for chunk in chunks if chunk)
-    
-    return "html", text_content
-
-def process_json(file_content: bytes) -> Tuple[str, str]:
-    """Extract text from JSON file"""
-    try:
-        # Try to decode as UTF-8
-        json_str = file_content.decode('utf-8')
-        # Parse JSON to validate format
-        json_data = json.loads(json_str)
+class DocumentProcessor:
+    def __init__(self, upload_folder: str):
+        """
+        Initialize the document processor with Docling converters and configuration
         
-        # Convert to string representation
-        if isinstance(json_data, Dict):
-            # If it's a dict, try to extract content intelligently
-            text_content = extract_json_content(json_data)
-        else:
-            # Otherwise just use the string representation
-            text_content = json_str
+        Args:
+            upload_folder (str): Base directory for storing uploaded files
+        """
+        self.upload_folder = Path(upload_folder)
+        self.upload_folder.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize Docling converters
+        self.converter = DocumentConverter()
+        self.chunker = HybridChunker(
+            min_words_per_chunk=30,
+            max_words_per_chunk=150,
+            overlap=5
+        )
+    
+    def process_document(self, filename: str, file_content: bytes) -> Dict[str, Any]:
+        """
+        Process an uploaded document using Docling
+        
+        Args:
+            filename (str): Original filename
+            file_content (bytes): File content as bytes
+        
+        Returns:
+            Dict containing document metadata and processed content
+        """
+        # Calculate file hashes
+        file_hash = self._calculate_file_hash(file_content)
+        
+        # Determine file type
+        file_type = self._get_file_type(filename)
+        
+        # Create a unique filename for storage
+        storage_filename = self._generate_unique_filename(filename, file_hash)
+        
+        # Store the raw file
+        full_path = self.upload_folder / storage_filename
+        full_path.write_bytes(file_content)
+        
+        try:
+            # Use Docling to convert the document
+            conversion_result = self.converter.convert(full_path)
             
-        return "json", text_content
-    except Exception as e:
-        raise ValueError(f"Invalid JSON file: {str(e)}")
-
-def extract_json_content(json_data: Dict[str, Any]) -> str:
-    """
-    Attempt to intelligently extract text content from JSON
-    Looks for known fields like 'content', 'text', 'description', etc.
-    """
-    # Look for content fields
-    content_fields = ['content', 'text', 'body', 'description', 'data']
+            # Export to Markdown
+            extracted_text = conversion_result.document.export_to_markdown()
+            
+            # Calculate content hash
+            content_hash = self._calculate_content_hash(extracted_text)
+            
+            # Prepare document metadata
+            document_data = {
+                'filename': filename,
+                'file_type': file_type,
+                'file_hash': file_hash,
+                'content_hash': content_hash,
+                'file_size': len(file_content),
+                'raw_file_path': str(full_path),
+                'content': extracted_text,
+                'metadata': {
+                    'page_count': conversion_result.document.page_count,
+                    'converter': 'docling'
+                }
+            }
+            
+            return document_data
+        
+        except Exception as e:
+            # Clean up the file if processing fails
+            full_path.unlink(missing_ok=True)
+            raise ValueError(f"Document processing failed: {str(e)}")
     
-    for field in content_fields:
-        if field in json_data and isinstance(json_data[field], str):
-            return json_data[field]
+    def _calculate_file_hash(self, file_content: bytes) -> str:
+        """Calculate SHA-256 hash of file content"""
+        return hashlib.sha256(file_content).hexdigest()
     
-    # If we have items/elements, extract content from each
-    if 'items' in json_data and isinstance(json_data['items'], list):
-        return '\n\n'.join(extract_json_content(item) if isinstance(item, dict) else str(item) 
-                           for item in json_data['items'])
+    def _calculate_content_hash(self, text_content: str) -> str:
+        """Calculate SHA-256 hash of text content"""
+        return hashlib.sha256(text_content.encode('utf-8')).hexdigest()
     
-    if 'elements' in json_data and isinstance(json_data['elements'], list):
-        return '\n\n'.join(extract_json_content(item) if isinstance(item, dict) else str(item) 
-                           for item in json_data['elements'])
+    def _get_file_type(self, filename: str) -> str:
+        """Determine file type from filename extension"""
+        return filename.split('.')[-1].lower()
     
-    # Fallback: serialize the whole JSON structure
-    return json.dumps(json_data)
-
-def process_text(file_content: bytes) -> Tuple[str, str]:
-    """Extract text from plain text file"""
-    try:
-        # Try to decode as UTF-8
-        text = file_content.decode('utf-8')
-    except UnicodeDecodeError:
-        # Fall back to latin-1 if UTF-8 fails
-        text = file_content.decode('latin-1')
+    def _generate_unique_filename(self, original_filename: str, file_hash: str) -> str:
+        """
+        Generate a unique filename based on file hash
+        
+        Creates a directory structure like:
+        uploads/ab/cd/abcdef1234...
+        """
+        # Use first two characters of hash for first-level directory
+        # Next two for second-level directory
+        hash_dir1 = file_hash[:2]
+        hash_dir2 = file_hash[2:4]
+        
+        # Get file extension
+        ext = Path(original_filename).suffix
+        
+        # Construct path
+        unique_path = f"{hash_dir1}/{hash_dir2}/{file_hash}{ext}"
+        
+        return unique_path
     
-    return "text", text
-
-async def combine_documents(document_ids: List[int], db) -> str:
-    """
-    Combine multiple documents into a single text for processing
-    """
-    from app.models.document import Document
-    
-    combined_text = ""
-    
-    documents = db.query(Document).filter(Document.id.in_(document_ids)).all()
-    for doc in documents:
-        combined_text += f"\n\n--- Content from {doc.filename} ---\n{doc.content}"
-    
-    return combined_text
-
-def clean_text_for_ai(text: str, max_length: int = 50000) -> str:
-    """
-    Clean and truncate text to prepare for AI processing
-    """
-    # Remove excessive whitespace
-    text = re.sub(r'\s+', ' ', text)
-    
-    # Truncate if too long
-    if len(text) > max_length:
-        text = text[:max_length] + "..."
-    
-    return text
+    def chunk_document(self, document_content: str) -> List[str]:
+        """
+        Chunk the document text using Docling's HybridChunker
+        
+        Args:
+            document_content (str): Full document text
+        
+        Returns:
+            List of text chunks
+        """
+        return self.chunker.chunk_text(document_content)

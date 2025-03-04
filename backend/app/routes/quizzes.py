@@ -359,6 +359,44 @@ async def add_question(
     
     return question
 
+@router.put("/{quiz_id}/questions/reorder")
+async def reorder_questions(
+    quiz_id: int, 
+    questions: List[Dict[str, int]],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Reorder questions in a quiz
+    """
+    # Validate quiz ownership
+    quiz = db.query(Quiz).filter(Quiz.id == quiz_id, Quiz.user_id == current_user.id).first()
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    
+    # Update positions for each question
+    for question_data in questions:
+        question = db.query(Question).filter(
+            Question.id == question_data['id'], 
+            Question.quiz_id == quiz_id
+        ).first()
+        
+        if question:
+            question.position = question_data['position']
+    
+    # Record history of reordering
+    HistoryService.record_quiz_action(
+        db=db,
+        quiz_id=quiz.id,
+        user_id=current_user.id,
+        action=ActionType.UPDATE,
+        details="Reordered questions"
+    )
+    
+    db.commit()
+    
+    return {"message": "Questions reordered successfully"}
+
 @router.put("/{quiz_id}/questions/{question_id}", response_model=QuestionSchema)
 async def update_question(
     quiz_id: int,

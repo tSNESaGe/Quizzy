@@ -88,11 +88,26 @@ export const getDocumentById = async (id) => {
   return api.get(`/documents/${id}`);
 };
 
-export const uploadDocument = async (file, createEmbeddings = true) => {
+export const uploadDocument = async (file, createEmbeddings = true, skipDuplicates = true) => {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('create_embeddings', createEmbeddings);
+  formData.append('skip_duplicates', skipDuplicates);
   return api.post('/documents/upload', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    }
+  });
+};
+
+export const batchUploadDocuments = async (files, createEmbeddings = true, skipDuplicates = true) => {
+  const formData = new FormData();
+  files.forEach(file => {
+    formData.append('files', file);
+  });
+  formData.append('create_embeddings', createEmbeddings);
+  formData.append('skip_duplicates', skipDuplicates);
+  return api.post('/documents/batch-upload', formData, {
     headers: {
       'Content-Type': 'multipart/form-data',
     }
@@ -105,6 +120,10 @@ export const deleteDocument = async (id) => {
 
 export const createDocumentEmbeddings = async (id) => {
   return api.post(`/documents/${id}/embeddings`);
+};
+
+export const deleteDocumentEmbeddings = async (id) => {
+  return api.delete(`/documents/${id}/embeddings`);
 };
 
 export const searchDocuments = async (query, documentIds = null, topK = 5) => {
@@ -146,11 +165,48 @@ export const regenerateQuiz = async (id, useEmbeddings = true) => {
 };
 
 export const addQuestion = async (quizId, questionData) => {
-  return api.post(`/quizzes/${quizId}/questions`, questionData);
+  // Make sure the question data is properly formatted for the backend
+  const formattedData = {
+    question_text: questionData.question_text,
+    question_type: questionData.question_type,
+    explanation: questionData.explanation || '',
+    position: questionData.position || 0,  // Default to 0 if no position specified
+    answers: questionData.answers.map((answer, index) => ({
+      answer_text: answer.answer_text,
+      is_correct: answer.is_correct,
+      position: answer.position || index
+    }))
+  };
+  
+  return api.post(`/quizzes/${quizId}/questions`, formattedData);
+};
+
+export const updateQuestionPositions = async (quizId, questions) => {
+  // Format questions into the correct structure for API
+  const questionsPayload = questions.map(question => ({
+    id: question.id,
+    position: question.position
+  }));
+  
+  return api.put(`/quizzes/${quizId}/questions/reorder`, questionsPayload);
 };
 
 export const updateQuestion = async (quizId, questionId, questionData) => {
-  return api.put(`/quizzes/${quizId}/questions/${questionId}`, questionData);
+  // Ensure only valid fields are sent
+  const validFields = {
+    question_text: questionData.question_text,
+    question_type: questionData.question_type,
+    explanation: questionData.explanation,
+    answers: questionData.answers,
+    open_ended_guidelines: questionData.open_ended_guidelines
+  };
+
+  // Filter out undefined or null values
+  const filteredData = Object.fromEntries(
+    Object.entries(validFields).filter(([_, v]) => v !== undefined && v !== null)
+  );
+
+  return api.put(`/quizzes/${quizId}/questions/${questionId}`, filteredData);
 };
 
 export const deleteQuestion = async (quizId, questionId) => {
@@ -161,15 +217,41 @@ export const regenerateQuestion = async (quizId, questionId, useDocumentContent 
   return api.post(`/quizzes/${quizId}/questions/${questionId}/regenerate?use_document_content=${useDocumentContent}`);
 };
 
+export const convertQuestionType = async (quizId, questionId, newType) => {
+  return api.post(`/quizzes/${quizId}/questions/${questionId}/change-type`, {
+    question_type: newType
+  });
+};
+
 export const changeQuestionType = async (quizId, questionId, newType, useDocumentContent = true) => {
-  return api.post(
-    `/quizzes/${quizId}/questions/${questionId}/change-type?use_document_content=${useDocumentContent}`,
-    { question_type: newType }
-  );
+  try {
+    const response = await api.post(
+      `/quizzes/${quizId}/questions/${questionId}/change-type`, 
+      { question_type: newType },
+      { params: { use_document_content: useDocumentContent } }
+    );
+    return response;
+  } catch (error) {
+    // Handle error specifically for question type conversion
+    console.error('Error changing question type:', error);
+    throw error;
+  }
+};
+
+export const getQuestionHistory = async (quizId, questionId, limit = 20) => {
+  return api.get(`/quizzes/${quizId}/questions/${questionId}/history?limit=${limit}`);
 };
 
 export const getQuizHistory = async (quizId, limit = 50) => {
   return api.get(`/quizzes/${quizId}/history?limit=${limit}`);
+};
+
+export const revertQuestion = async (quizId, questionId, historyId = null) => {
+  let url = `/quizzes/${quizId}/questions/${questionId}/revert`;
+  if (historyId) {
+    url += `?history_id=${historyId}`;
+  }
+  return api.post(url);
 };
 
 export const revertQuiz = async (quizId, historyId = null) => {

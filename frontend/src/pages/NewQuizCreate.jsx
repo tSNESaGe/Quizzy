@@ -1,26 +1,39 @@
-// frontend/src/pages/NewQuizCreate.jsx
-import React, { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
 import { toast } from 'react-hot-toast';
 import useAppStore from '../store/appStore';
 import QuizBuilder from '../components/quiz/QuizBuilder';
+import { getDocuments } from '../services/api';
 
 const NewQuizCreate = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [documents, setDocuments] = useState([]);
+  const [selectedDocuments, setSelectedDocuments] = useState([]);
   const { 
     error, 
-    clearError, 
-    isAuthenticated 
+    clearError
   } = useAppStore();
 
-  // Ensure user is authenticated
+  // Fetch all documents when component mounts
   useEffect(() => {
-    if (!isAuthenticated) {
-      toast.error('Please log in to create a quiz');
-      navigate('/login', { state: { from: '/quizzes/new' } });
+    async function fetchAllDocuments() {
+      try {
+        const fetchedDocuments = await getDocuments();
+        setDocuments(fetchedDocuments);
+
+        // Check if documents were pre-selected from navigation state
+        const preSelectedDocs = location.state?.selectedDocumentIds || [];
+        setSelectedDocuments(preSelectedDocs);
+      } catch (error) {
+        console.error('Failed to fetch documents:', error);
+        toast.error('Failed to load documents');
+      }
     }
-  }, [isAuthenticated, navigate]);
+
+    fetchAllDocuments();
+  }, [location.state]);
 
   // Clear any errors when component mounts and unmounts
   useEffect(() => {
@@ -36,18 +49,13 @@ const NewQuizCreate = () => {
   }, [error]);
 
   return (
-    <>
-      <Helmet>
-        <title>Create New Quiz | AI Quiz Generator</title>
-        <meta name="description" content="Create a new AI-generated quiz based on your documents or any topic" />
-      </Helmet>
-      
-      <div className="bg-gray-50 min-h-screen">
-        <div className="container mx-auto py-6">
-          <QuizBuilder />
-        </div>
+    <div className="bg-gray-50 min-h-screen">
+      <div className="container mx-auto py-6">
+        <QuizBuilder 
+          initialSelectedDocuments={location.state?.selectedDocumentIds || []} 
+        />
       </div>
-    </>
+    </div>
   );
 };
 

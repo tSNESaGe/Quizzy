@@ -5,6 +5,61 @@ from typing import Tuple, Dict, Any
 import docx
 from PyPDF2 import PdfReader
 from bs4 import BeautifulSoup
+import hashlib
+
+def calculate_file_hash(file_content: bytes) -> str:
+    """
+    Calculate a SHA-256 hash of file content to identify duplicates
+    """
+    return hashlib.sha256(file_content).hexdigest()
+
+def check_duplicate_file(db, user_id: int, file_hash: str) -> Optional[Document]:
+    """
+    Check if a user has already uploaded a file with the same hash
+    
+    Args:
+        db: Database session
+        user_id: ID of the current user
+        file_hash: SHA-256 hash of the file content
+        
+    Returns:
+        Document object if a duplicate exists, None otherwise
+    """
+    from app.models.document import Document
+    
+    # Query for documents with the same hash belonging to this user
+    duplicate = db.query(Document).filter(
+        Document.user_id == user_id,
+        Document.file_hash == file_hash
+    ).first()
+    
+    return duplicate
+
+def check_duplicate_content(db, user_id: int, content: str) -> Optional[Document]:
+    """
+    Check if a user has already uploaded a document with similar content
+    This is a simpler check than semantic similarity, just looking for exact matches
+    
+    Args:
+        db: Database session
+        user_id: ID of the current user
+        content: Extracted text content
+        
+    Returns:
+        Document object if a duplicate exists, None otherwise
+    """
+    from app.models.document import Document
+    
+    # Hash the content for more efficient comparison
+    content_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
+    
+    # Query for documents with the same content hash belonging to this user
+    duplicate = db.query(Document).filter(
+        Document.user_id == user_id,
+        Document.content_hash == content_hash
+    ).first()
+    
+    return duplicate
 
 async def process_document(filename: str, file_content: bytes) -> Tuple[str, str]:
     """
